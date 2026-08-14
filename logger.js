@@ -32,5 +32,9 @@ module.exports = {
   saved: (item, msg) => write('SAVED', item, msg),
   skippedMissing: (item, msg) => write('SKIP_MISSING', item, msg),
   skippedInvalid: (item, msg) => write('SKIP_INVALID', item, msg),
+  pendingReview: (item, msg) => write('CAN_XEM_LAI', item, msg),
+  incomplete: (item, msg) => write('CHUA_HOAN_THIEN', item, msg),
+  signed: (item, msg) => write('DA_KY_HO_SO', item, msg),
+  warn: (item, msg) => write('WARN', item, msg),
   error: (item, msg) => write('ERROR', item, msg),
 };
