@@ -1,0 +1,45 @@
+{
+  "cookies": [
+    {
+      "name": "refresh_token",
+      "value": "7c722d57-5511-4a51-9f77-5c51e899ee8d",
+      "domain": "bvrhm.hosoyte.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "client_id",
+      "value": "3E46A49F-EE20-4A48-B29C-48B010026E1F",
+      "domain": "bvrhm.hosoyte.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "sub",
+      "value": "79415_hainnm",
+      "domain": "bvrhm.hosoyte.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://bvrhm.hosoyte.com",
+      "localStorage": [
+        {
+          "name": "currentUser",
+          "value": "{\"access_token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1laWRlbnRpZmllciI6IjU0NjRiNDczLTlmMWMtNDgyNi1hN2JkLWE3N2JmYzJlYmM1ZiIsImh0dHA6Ly9zY2hlbWFzLnhtbHNvYXAub3JnL3dzLzIwMDUvMDUvaWRlbnRpdHkvY2xhaW1zL25hbWUiOiI3OTQxNV9oYWlubm0iLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL2FjY2Vzc2NvbnRyb2xzZXJ2aWNlLzIwMTAvMDcvY2xhaW1zL2lkZW50aXR5cHJvdmlkZXIiOiJBU1AuTkVUIElkZW50aXR5IiwiQXNwTmV0LklkZW50aXR5LlNlY3VyaXR5U3RhbXAiOiJlOGQxYjAyYS03YTUyLTQyODktYmI2OS02Yjg2ZjVjZTE1NmQiLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJLZUhvYWNoVG9uZ0hvcCIsIkt5U29Ib1NvIjoiSXNLeVNvIiwiZG9tYWluIjpbIioiLCIqIiwiKiJdLCJtZW51IjpbIm1lbnVfaHNiYSIsIm1lbnVfaW1wIiwibWVudV9laHIiLCJlaHIiLCJtZW51X2hpcyIsImFsbCJdLCJOZ3VvaVRIRHV5ZXRIU0JBIjoic3VhIiwic29jaHV5ZW50dXllbiI6ImFsbCIsIkZpbGVQREYiOlsiSXNUYWlwZGYiLCJJc1Rhb1BERiIsIklzSHV5RmlsZSJdLCJIU0JBIjoic3VhIiwiYmFvY2FvIjoiYWxsIiwiRmlsdGVyS2hvYSI6ImFsbCIsImh1eWt5IjoibWUiLCJTdWFIU0JBIjpbIlRpY2hIb2FuVGhhbmhLeSIsIlN1YVNhdUx1dVRydSJdLCJyb2xlIjpbIkhTQkEiLCJLZUhvYWNoVG9uZ0hvcCJdLCJuYmYiOjE3ODU1NDY2NDAsImV4cCI6MTc4Njc1NjI0MCwiaXNzIjoiaWQuaHNkdC52biIsImF1ZCI6IjNFNDZBNDlGLUVFMjAtNEE0OC1CMjlDLTQ4QjAxMDAyNkUxRiJ9.sm6Fwb22NqJDr8DU1NPnA7Gar9vohapWI-OHR9oFJgI\",\"token_type\":\"bearer\",\"expires_in\":1209599,\"refresh_token\":\"7c722d57-5511-4a51-9f77-5c51e899ee8d\",\"as:client_id\":\"3E46A49F-EE20-4A48-B29C-48B010026E1F\",\"id\":\"5464b473-9f1c-4826-a7bd-a77bfc2ebc5f\",\"username\":\"79415_hainnm\",\"FirstName\":\"Nguyễn Ngọc Minh\",\"LastName\":\"Hải\",\"HoTen\":\"Nguyễn Ngọc Minh Hải\",\"ChuKy\":\"392025a3-1695-4a9a-93a4-a896f55dc305\",\"Domain\":\"79415\",\"Email\":\"79415_hainnm@hosodientu.vn\",\"CCHN\":\"KHONGCO\",\"AvatarUrl\":\"assets/img/icon/avatar.png\",\"IdKho\":\"e113284c-c494-4912-a879-55c0cbefe831\",\"IdPhong\":null,\"IdKhoa\":\"cb3c6c04-08bf-4133-b06d-a21e1c842347\",\"IdDonVi\":\"89cea193-c6d7-4497-9b2e-64944bb51b2b\",\"IsTKChung\":\"False\",\"IdLoaiTaiKhoan\":\"29ff9edd-1692-440c-abfb-992acaf4fa41\",\"IdGroup\":\"19911f2d-b345-4a34-bda2-48dfad1576cb\",\"IdNodes\":\"36|cb3c6c04-08bf-4133-b06d-a21e1c84234736|92065a1b-9f78-4fa2-b43f-4bdd5057b12336|1fd4b1c9-4dbf-4c90-ace8-151f138e04b836|74b066bf-c0f0-4c0c-99e7-25d1cc78d1ac36|3fcf4d70-0ede-4c9e-9fb4-ba2ea7963d8b36|2e0acb5c-c4b4-4e24-bea0-2449915a769236|9cd48ee8-2315-4b4a-9f6e-251d77c6e15f36|b248be7c-0e8b-4a88-8f6c-b99ca949921a36|ca166a53-a4a3-47cf-9f21-eb776368734f36|11779e65-7f88-4651-82bf-7fcfe2d589a936|413ab90c-2d29-450a-87a3-97c846fa57fb36|866315ab-f814-460e-9364-f8e3c3cb15a436|c0e42659-8619-452d-8038-a3f33501520436|75d76df7-465a-453a-8ad1-fa29fbeed03236|1a65733e-86b2-4638-822a-c90975a04bb5\",\"ListIdKhoa\":\";a9b638fe-33ea-4e7a-96a5-aab3e2d15ff4;1a65733e-86b2-4638-822a-c90975a04bb5\",\".issued\":\"Sat, 01 Aug 2026 01:10:40 GMT\",\".expires\":\"Sat, 15 Aug 2026 01:10:40 GMT\",\"token\":{\"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier\":\"5464b473-9f1c-4826-a7bd-a77bfc2ebc5f\",\"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name\":\"79415_hainnm\",\"http://schemas.microsoft.com/accesscontrolservice/2010/07/claims/identityprovider\":\"ASP.NET Identity\",\"AspNet.Identity.SecurityStamp\":\"e8d1b02a-7a52-4289-bb69-6b86f5ce156d\",\"http://schemas.microsoft.com/ws/2008/06/identity/claims/role\":\"KeHoachTongHop\",\"KySoHoSo\":\"IsKySo\",\"domain\":[\"*\",\"*\",\"*\"],\"menu\":[\"menu_hsba\",\"menu_imp\",\"menu_ehr\",\"ehr\",\"menu_his\",\"all\"],\"NguoiTHDuyetHSBA\":\"sua\",\"sochuyentuyen\":\"all\",\"FilePDF\":[\"IsTaipdf\",\"IsTaoPDF\",\"IsHuyFile\"],\"HSBA\":\"sua\",\"baocao\":\"all\",\"FilterKhoa\":\"all\",\"huyky\":\"me\",\"SuaHSBA\":[\"TichHoanThanhKy\",\"SuaSauLuuTru\"],\"role\":[\"HSBA\",\"KeHoachTongHop\"],\"nbf\":1785546640,\"exp\":1786756240,\"iss\":\"id.hsdt.vn\",\"aud\":\"3E46A49F-EE20-4A48-B29C-48B010026E1F\"},\"IdKhoaChinh\":\"cb3c6c04-08bf-4133-b06d-a21e1c842347\",\"DMKhoa\":{\"Name\":\"Phòng KHTH\",\"Code\":\"khth\"},\"Role\":\"KeHoachTongHop\"}"
+        }
+      ]
+    }
+  ]
+}

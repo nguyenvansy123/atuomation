@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Playwright / browser cache
+playwright-report/
+playwright/.cache/
+
+# Local auth/session state
+storageState.json
+
+# Runtime outputs
+output.jsonl
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+
+# Environment files
+.env
+.env.*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Optional: keep repo clean
+npm-debug.log*
