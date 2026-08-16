@@ -1,5 +1,13 @@
 {
+  "name": "automation-ui",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/data-service.test.js"
+  },
   "dependencies": {
+    "express": "^5.2.1",
     "playwright": "^1.62.1"
   }
 }

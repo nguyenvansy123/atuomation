@@ -1,0 +1,19 @@
+{
+  "pageSize": "10",
+  "from": "2026-01-01 00:00:00",
+  "to": "2026-08-16 23:59:00",
+  "iBaoHiem": "2",
+  "isCapCuu": "false",
+  "NamVien": "false",
+  "idKhoa": "ca166a53-a4a3-47cf-9f21-eb776368734f",
+  "maLoaiBenhAn": "",
+  "strsearch": "",
+  "Active": "true",
+  "TrangThaiKy": "ChoDuyet",
+  "MaTrangThaiNode": "DONE",
+  "idTruongKhoaKy": "undefined",
+  "idNguoiDuyet": "undefined",
+  "idCanBo": "undefined",
+  "iBADT": "2",
+  "idKhoaDieuTri": "ca166a53-a4a3-47cf-9f21-eb776368734f"
+}

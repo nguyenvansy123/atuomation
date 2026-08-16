@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quản lý dữ liệu lọc</title>
+    <style>
+      :root {
+        --surface: #f5f5f5;
+        --panel: #ffffff;
+        --line: #cfcfcf;
+        --text: #1d1d1f;
+        --muted: #6b7280;
+        --green: #dff4e7;
+        --green-text: #1f7d4e;
+        --yellow: #f8d05d;
+        --yellow-strong: #dca200;
+        --danger: #d32f2f;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: Arial, Helvetica, sans-serif;
+        background: #efefef;
+        color: var(--text);
+      }
+
+      .container {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 12px 10px 20px;
+      }
+
+      .filter-panel,
+      .sendstore-panel {
+        background: #f3f3f3;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        margin-bottom: 12px;
+      }
+
+      .filter-row,
+      .sendstore-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: nowrap;
+        min-width: 0;
+      }
+
+      .control {
+        position: relative;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        min-height: 36px;
+        overflow: hidden;
+        flex: 0 0 auto;
+      }
+
+      .date-box { width: 140px; }
+      .select-khoa { width: 260px; }
+      .select-namvien { width: 120px; }
+      .action-button { width: 150px; }
+      .sendstore-row .control { min-width: 0; }
+      .sendstore-row .page-size { width: 110px; }
+      .sendstore-row .date-box { width: 170px; }
+      .sendstore-row .select-khoa { width: 240px; }
+      .sendstore-row .status-box { width: 220px; }
+
+      .control.select-wrap select,
+      .control.input-wrap input,
+      .control.search-wrap input {
+        width: 100%;
+        height: 100%;
+        border: none;
+        outline: none;
+        background: transparent;
+        padding: 8px 10px;
+        font-size: 14px;
+        color: var(--text);
+      }
+
+      .control.search-wrap {
+        display: flex;
+        align-items: center;
+        background: #fff;
+      }
+
+      .control.search-wrap input {
+        padding-left: 12px;
+      }
+
+      .date-range {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+
+      .mini-check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 36px;
+        padding: 0 10px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        width: 120px;
+      }
+
+      .mini-check input {
+        margin: 0;
+      }
+
+      .mini-check label {
+        font-size: 14px;
+        margin: 0;
+      }
+
+      .action-button {
+        border: 1px solid #d5b14a;
+        background: var(--yellow);
+        color: #1f2937;
+        border-radius: 4px;
+        height: 36px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .action-button:hover {
+        background: var(--yellow-strong);
+      }
+
+      .result-table {
+        margin-top: 16px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .result-head,
+      .result-row {
+        display: grid;
+        grid-template-columns: 1.1fr 1.3fr 1.1fr 1.3fr 1.2fr 1.2fr 1.2fr 0.8fr;
+      }
+
+      .result-head {
+        background: #f5f5f5;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .head-cell,
+      .row-cell {
+        padding: 10px 8px;
+        border-right: 1px solid var(--line);
+        min-height: 42px;
+        display: flex;
+        align-items: center;
+      }
+
+      .head-cell:last-child,
+      .row-cell:last-child { border-right: none; }
+
+      .head-cell {
+        font-size: 12px;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .result-row {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .result-row:last-child { border-bottom: none; }
+
+      .badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-weight: 600;
+        font-size: 12px;
+      }
+
+      .badge.pending { background: #fff3d6; color: #ab6b00; }
+      .badge.approved { background: #dff7eb; color: #16804a; }
+      .badge.rejected { background: #f9d8d8; color: #b42318; }
+
+      .tiny-btn {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 4px;
+        padding: 5px 8px;
+        cursor: pointer;
+      }
+
+      .tiny-btn.danger {
+        background: #fff5f5;
+        color: var(--danger);
+      }
+
+      .empty {
+        padding: 24px 12px;
+        text-align: center;
+        color: var(--muted);
+      }
+
+      @media (max-width: 1200px) {
+        .filter-row {
+          grid-template-columns: repeat(2, minmax(180px, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="sendstore-panel">
+        <div class="sendstore-row">
+          <div class="control select-wrap page-size">
+            <select id="send-page-size">
+              <option value="5">05</option>
+              <option value="10" selected>10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+
+          <div class="control input-wrap date-box">
+            <input id="send-from-date" type="datetime-local" value="2026-01-01T00:00" />
+          </div>
+
+          <div class="control input-wrap date-box">
+            <input id="send-to-date" type="datetime-local" value="2026-08-16T23:59" />
+          </div>
+
+          <div class="control select-wrap select-khoa">
+            <select id="send-khoa"></select>
+          </div>
+
+          <div class="control select-wrap status-box">
+            <select id="send-status">
+              <option value="ChoDuyet">Chờ phòng KHTH duyệt</option>
+              <option value="ChoKyGiamDoc">Chờ giám đốc ký duyệt</option>
+              <option value="ChoLuuTru">Chờ lưu trữ bệnh án</option>
+              <option value="LuuTruBADT">Đã lưu trữ bệnh án</option>
+            </select>
+          </div>
+
+          <div class="mini-check">
+            <input id="send-is-cap-cuu" type="checkbox" />
+            <label for="send-is-cap-cuu">Cấp cứu</label>
+          </div>
+
+          <div class="control select-wrap select-namvien">
+            <select id="send-nam-vien">
+              <option value="iALL">Tất cả</option>
+              <option value="true">Nội trú</option>
+              <option value="false">Ngoại trú</option>
+            </select>
+          </div>
+
+          <button id="run-send-store-form" class="action-button" type="button" style="background:#dff4e7;border-color:#7fc89d;">Gửi lưu trữ DOM</button>
+        </div>
+      </div>
+
+      <div class="filter-panel">
+        <div class="filter-row">
+          <div class="date-range">
+            <div class="control input-wrap date-box">
+              <input id="from-date" type="date" value="2025-02-25" />
+            </div>
+            <div class="control input-wrap date-box">
+              <input id="to-date" type="date" value="2025-02-28" />
+            </div>
+          </div>
+
+          <div class="control select-wrap select-khoa">
+            <select id="khoa"></select>
+          </div>
+
+          <div class="control select-wrap select-namvien">
+            <select id="nam-vien">
+              <option value="iALL">Tất cả</option>
+              <option value="true">Nội trú</option>
+              <option value="false">Ngoại trú</option>
+            </select>
+          </div>
+
+          <button id="apply-filter" class="action-button" type="button">Duyệt hàng loạt</button>
+        </div>
+      </div>
+
+      <div class="result-table">
+        <div class="result-head">
+          <div class="head-cell">Mã bệnh án</div>
+          <div class="head-cell">Bệnh nhân</div>
+          <div class="head-cell">Khoa</div>
+          <div class="head-cell">Danh sách</div>
+          <div class="head-cell">Trạng thái</div>
+          <div class="head-cell">Người duyệt</div>
+          <div class="head-cell">Ghi chú</div>
+          <div class="head-cell">Hành động</div>
+        </div>
+        <div id="records-body"></div>
+      </div>
+    </div>
+
+    <script>
+
+      const recordsBody = document.getElementById('records-body');
+      const applyButton = document.getElementById('apply-filter');
+      const sendStoreButton = document.getElementById('run-send-store-form');
+      const khoaSelect = document.getElementById('khoa');
+      const sendKhoaSelect = document.getElementById('send-khoa');
+
+      async function loadKhoaOptions() {
+        try {
+          const response = await fetch('/api/khoa-options');
+          if (!response.ok) return;
+          const items = await response.json();
+          if (!Array.isArray(items)) return;
+
+          khoaSelect.innerHTML = items
+            .map((item) => `<option value="${item.value}">${item.label}</option>`)
+            .join('');
+
+          const savedConfig = await fetch('/api/filter-config').then((res) => res.ok ? res.json() : null).catch(() => null);
+          const selectedKhoa = savedConfig?.idKhoa || savedConfig?.idKhoaDieuTri || '00000000-0000-0000-0000-000000000000';
+          const matched = items.find((item) => item.value === selectedKhoa);
+          if (matched) {
+            khoaSelect.value = matched.value;
+          } else {
+            const defaultOption = items.find((item) => item.value === '00000000-0000-0000-0000-000000000000');
+            if (defaultOption) khoaSelect.value = defaultOption.value;
+          }
+
+          const fromInput = document.getElementById('from-date');
+          const toInput = document.getElementById('to-date');
+          const namVienInput = document.getElementById('nam-vien');
+
+          if (fromInput && savedConfig?.from) {
+            const fromDate = String(savedConfig.from).split(' ')[0];
+            fromInput.value = fromDate;
+          }
+
+          if (toInput && savedConfig?.to) {
+            const toDate = String(savedConfig.to).split(' ')[0];
+            toInput.value = toDate;
+          }
+
+          if (namVienInput && savedConfig?.NamVien != null) {
+            const value = String(savedConfig.NamVien);
+            if (value === 'true' || value === 'false') namVienInput.value = value;
+          }
+        } catch (error) {
+          console.error('Không thể tải danh sách khoa:', error);
+        }
+      }
+
+      function toSqlDateTime(value, defaultTime = '00:00:00') {
+        if (!value) return defaultTime;
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+          return defaultTime;
+        }
+        const yyyy = date.getFullYear();
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const dd = String(date.getDate()).padStart(2, '0');
+        const hh = String(date.getHours()).padStart(2, '0');
+        const mi = String(date.getMinutes()).padStart(2, '0');
+        const ss = String(date.getSeconds()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+      }
+
+      function buildFilterPayload() {
+        const from = document.getElementById('from-date')?.value || '2025-02-25';
+        const to = document.getElementById('to-date')?.value || '2025-02-28';
+        const khoa = document.getElementById('khoa')?.value || '00000000-0000-0000-0000-000000000000';
+        const namVien = document.getElementById('nam-vien')?.value || 'iALL';
+
+        return {
+          pageSize: '10',
+          from: `${from} 00:00:00`,
+          to: `${to} 23:59:59`,
+          iBaoHiem: '2',
+          isCapCuu: 'false',
+          NamVien: namVien === 'true' ? 'true' : namVien === 'false' ? 'false' : 'false',
+          idKhoa: khoa,
+          maLoaiBenhAn: '',
+          strsearch: '',
+          iBADT: '2',
+          MaTrangThaiNode: 'DONE',
+          Active: 'true',
+          TrangThaiKy: 'ChoDuyet',
+          idTruongKhoaKy: 'undefined',
+          idNguoiDuyet: 'undefined',
+          idCanBo: 'undefined',
+          idKhoaDieuTri: khoa,
+        };
+      }
+
+      function buildSendStorePayload() {
+        const pageSize = document.getElementById('send-page-size')?.value || '10';
+        const fromValue = document.getElementById('send-from-date')?.value || '2026-01-01T00:00';
+        const toValue = document.getElementById('send-to-date')?.value || '2026-08-16T23:59';
+        const khoa = document.getElementById('send-khoa')?.value || '00000000-0000-0000-0000-000000000000';
+        const namVien = document.getElementById('send-nam-vien')?.value || 'iALL';
+        const status = document.getElementById('send-status')?.value || 'ChoDuyet';
+        const capCuu = document.getElementById('send-is-cap-cuu')?.checked ? 'true' : 'false';
+
+        return {
+          pageSize,
+          from: toSqlDateTime(fromValue, '2026-01-01 00:00:00'),
+          to: toSqlDateTime(toValue, '2026-08-16 23:59:59'),
+          iBaoHiem: '2',
+          isCapCuu: capCuu,
+          NamVien: namVien === 'true' ? 'true' : namVien === 'false' ? 'false' : 'false',
+          idKhoa: khoa,
+          maLoaiBenhAn: '',
+          strsearch: '',
+          iBADT: '2',
+          MaTrangThaiNode: 'DONE',
+          Active: 'true',
+          TrangThaiKy: status,
+          idTruongKhoaKy: 'undefined',
+          idNguoiDuyet: 'undefined',
+          idCanBo: 'undefined',
+          idKhoaDieuTri: khoa,
+        };
+      }
+
+      async function saveAndRunFilters(pathName = '/api/run-main', label = 'automation', payloadOverride = null, configEndpoint = '/api/filter-config') {
+        const payload = payloadOverride || buildFilterPayload();
+
+        const saveResp = await fetch(configEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!saveResp.ok) {
+          alert('Lưu cấu hình lọc thất bại.');
+          return;
+        }
+
+        const runResp = await fetch(pathName, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        const result = await runResp.json();
+        if (!result.ok) {
+          alert(`Chạy ${label} thất bại: ${result.error || 'Lỗi không xác định'}`);
+          return;
+        }
+
+        alert(`Đã lưu cấu hình lọc và gửi lệnh chạy ${label} thành công.`);
+      }
+
+      applyButton.addEventListener('click', () => saveAndRunFilters('/api/run-main', 'automation chính', null, '/api/filter-config'));
+      sendStoreButton.addEventListener('click', () => saveAndRunFilters('/api/run-send-store', 'DOM send-store', buildSendStorePayload(), '/api/send-store-filter-config'));
+
+      async function populateSendStoreDefaults() {
+        try {
+          const saved = await fetch('/api/send-store-filter-config').then((res) => res.ok ? res.json() : null).catch(() => null);
+          if (sendKhoaSelect && saved?.idKhoaDieuTri) {
+            sendKhoaSelect.value = saved.idKhoaDieuTri;
+          }
+          if (saved?.from) {
+            const fromDate = new Date(saved.from.replace(' ', 'T'));
+            if (!Number.isNaN(fromDate.getTime())) {
+              document.getElementById('send-from-date').value = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}-${String(fromDate.getDate()).padStart(2, '0')}T${String(fromDate.getHours()).padStart(2, '0')}:${String(fromDate.getMinutes()).padStart(2, '0')}`;
+            }
+          }
+          if (saved?.to) {
+            const toDate = new Date(saved.to.replace(' ', 'T'));
+            if (!Number.isNaN(toDate.getTime())) {
+              document.getElementById('send-to-date').value = `${toDate.getFullYear()}-${String(toDate.getMonth() + 1).padStart(2, '0')}-${String(toDate.getDate()).padStart(2, '0')}T${String(toDate.getHours()).padStart(2, '0')}:${String(toDate.getMinutes()).padStart(2, '0')}`;
+            }
+          }
+          if (saved?.TrangThaiKy) {
+            const statusInput = document.getElementById('send-status');
+            if (statusInput) statusInput.value = saved.TrangThaiKy;
+          }
+          if (saved?.pageSize) {
+            const sizeInput = document.getElementById('send-page-size');
+            if (sizeInput) sizeInput.value = String(saved.pageSize);
+          }
+        } catch (error) {
+          console.error('Không thể nạp cấu hình gửi lưu trữ:', error);
+        }
+      }
+
+      async function loadKhoaOptions() {
+        try {
+          const response = await fetch('/api/khoa-options');
+          if (!response.ok) return;
+          const items = await response.json();
+          if (!Array.isArray(items)) return;
+
+          const optionHtml = items
+            .map((item) => `<option value="${item.value}">${item.label}</option>`)
+            .join('');
+
+          if (khoaSelect) khoaSelect.innerHTML = optionHtml;
+          if (sendKhoaSelect) sendKhoaSelect.innerHTML = optionHtml;
+
+          const savedConfig = await fetch('/api/filter-config').then((res) => res.ok ? res.json() : null).catch(() => null);
+          const selectedKhoa = savedConfig?.idKhoa || savedConfig?.idKhoaDieuTri || '00000000-0000-0000-0000-000000000000';
+          const matched = items.find((item) => item.value === selectedKhoa);
+          if (matched) {
+            if (khoaSelect) khoaSelect.value = matched.value;
+            if (sendKhoaSelect) sendKhoaSelect.value = matched.value;
+          } else {
+            const defaultOption = items.find((item) => item.value === '00000000-0000-0000-0000-000000000000');
+            if (defaultOption) {
+              if (khoaSelect) khoaSelect.value = defaultOption.value;
+              if (sendKhoaSelect) sendKhoaSelect.value = defaultOption.value;
+            }
+          }
+
+          const fromInput = document.getElementById('from-date');
+          const toInput = document.getElementById('to-date');
+          const namVienInput = document.getElementById('nam-vien');
+
+          if (fromInput && savedConfig?.from) {
+            const fromDate = String(savedConfig.from).split(' ')[0];
+            fromInput.value = fromDate;
+          }
+
+          if (toInput && savedConfig?.to) {
+            const toDate = String(savedConfig.to).split(' ')[0];
+            toInput.value = toDate;
+          }
+
+          if (namVienInput && savedConfig?.NamVien != null) {
+            const value = String(savedConfig.NamVien);
+            if (value === 'true' || value === 'false') namVienInput.value = value;
+          }
+
+          await populateSendStoreDefaults();
+        } catch (error) {
+          console.error('Không thể tải danh sách khoa:', error);
+        }
+      }
+
+      loadKhoaOptions();
+    </script>
+  </body>
+</html>

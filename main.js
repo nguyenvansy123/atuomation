@@ -2,6 +2,7 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 const log = require('./logger');
+const { getDefaultFilters, readFilterConfig } = require('./filter-config');
 
 const STORAGE_STATE_PATH = './storageState.json';
 const MODAL_LOG_PATH = path.join(__dirname, 'logs', 'modal-confirm.log');
@@ -34,23 +35,30 @@ function getFilterRange() {
 // Gọi 1 lần duy nhất, dùng chung cho cả FILTERS lẫn log
 const { from: FILTER_FROM, to: FILTER_TO } = getFilterRange();
 
+function resolveSavedFilters() {
+  try {
+    if (process.env.FILTER_CONFIG) {
+      const parsed = JSON.parse(process.env.FILTER_CONFIG);
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch (error) {
+    // bỏ qua nếu không có biến môi trường hợp lệ
+  }
+
+  try {
+    return readFilterConfig();
+  } catch (error) {
+    return {};
+  }
+}
+
+const userFilters = resolveSavedFilters();
 const BASE_FILTERS = Object.freeze({
-  isCapCuu: 'false',
-  iBaoHiem: '2',
-  NamVien: 'false',
-  from: FILTER_FROM,
-  to: FILTER_TO,
-  idKhoa: '00000000-0000-0000-0000-000000000000',
-  idCanBo: 'undefined',
-  maLoaiBenhAn: '',
-  strsearch: '',
-  iBADT: '2',
-  MaTrangThaiNode: 'DONE',
-  pageSize: String(PAGE_SIZE),
-  Active: 'true',
-  TrangThaiKy: 'ChoDuyet',
-  idTruongKhoaKy: 'undefined',
-  idNguoiDuyet: 'undefined',
+  ...getDefaultFilters(),
+  ...userFilters,
+  pageSize: String(userFilters.pageSize || PAGE_SIZE),
+  from: userFilters.from || FILTER_FROM,
+  to: userFilters.to || FILTER_TO,
 });
 
 function cleanLogValue(value) {
@@ -255,16 +263,15 @@ async function fetchAllItems(context, currentUser) {
 
   while (true) {
     const page = await fetchItemsPage(context, currentUser, pageIndex);
-      // total = page.total;
-    total = 50;
+    total = Number(page.total) || total || 0;
     allItems.push(...page.items);
 
     log.info(
       'SYSTEM',
-      `Đã tải trang ${pageIndex}: +${page.items.length} hồ sơ (tổng cộng ${allItems.length}/${total}).`
+      `Đã tải trang ${pageIndex}: +${page.items.length} hồ sơ (tổng cộng ${allItems.length}/${total || 'không rõ'}).`
     );
 
-    if (page.items.length === 0 || allItems.length >= total) break;
+    if (page.items.length === 0 || (total > 0 && allItems.length >= total)) break;
     pageIndex += 1;
   }
 
@@ -682,45 +689,75 @@ async function processDocument(page, item) {
     });
 
     const currentUser = await getCurrentUser(page);
-    const { total, items: allItems } = await fetchAllItems(context, currentUser);
-    log.info('SYSTEM', `Bộ lọc tìm thấy ${total} hồ sơ; đã tải đủ ${allItems.length} hồ sơ.`);
+    const pageSize = Number(BASE_FILTERS.pageSize || PAGE_SIZE) || PAGE_SIZE;
+    const maxProcessItems = TEST_LIMIT && TEST_LIMIT > 0 ? TEST_LIMIT : null;
 
-    // TEST: chỉ lấy TEST_LIMIT bản ghi đầu để chạy thử trước khi xử lý toàn bộ.
-    // Đặt TEST_LIMIT = null (hoặc 0) ở đầu file để chạy full không giới hạn.
-    const items =
-      TEST_LIMIT && TEST_LIMIT > 0 ? allItems.slice(0, TEST_LIMIT) : allItems;
-    if (TEST_LIMIT && TEST_LIMIT > 0) {
-      log.info(
-        'SYSTEM',
-        `[TEST MODE] Chỉ xử lý ${items.length}/${allItems.length} hồ sơ đầu tiên (TEST_LIMIT=${TEST_LIMIT}).`
-      );
-    }
+    let pageIndex = 1;
+    let processedCount = 0;
+    let total = 0;
 
-    for (const item of items) {
-      const itemKey = cleanLogValue(item.MaYTe || item.id || item.MaBenhAn || 'UNKNOWN');
-      const patientName = cleanLogValue(item.HoTenBenhNhan || item.HoTenBN || '');
+    log.info('SYSTEM', `Bắt đầu xử lý từng trang, mỗi trang xử lý xong mới chuyển sang trang tiếp theo.`);
 
-      log.info(itemKey, `Bắt đầu xử lý hồ sơ: ${patientName}`);
+    while (true) {
+      const pageData = await fetchItemsPage(context, currentUser, pageIndex);
+      const items = Array.isArray(pageData?.items) ? pageData.items : [];
+      total = Number(pageData?.total) || total || 0;
 
-      try {
-        const detailPage = await openDocumentRecord(context, item);
-        if (!detailPage) {
-          log.pendingReview(itemKey, `Không mở được chi tiết hồ sơ. Họ tên: ${patientName}`);
-          continue;
+      if (!items.length) {
+        log.info('SYSTEM', `Trang ${pageIndex} không còn dữ liệu, dừng xử lý.`);
+        break;
+      }
+
+      log.info('SYSTEM', `=== Xử lý trang ${pageIndex}${total ? `/${Math.ceil(total / pageSize)}` : ''} ===`);
+
+      for (const item of items) {
+        if (maxProcessItems && processedCount >= maxProcessItems) {
+          log.info('SYSTEM', `[TEST MODE] Đã xử lý đủ ${maxProcessItems} hồ sơ, dừng.`);
+          return;
         }
+
+        processedCount += 1;
+
+        const itemKey = cleanLogValue(item.MaYTe || item.id || item.MaBenhAn || 'UNKNOWN');
+        const patientName = cleanLogValue(item.HoTenBenhNhan || item.HoTenBN || '');
+
+        log.info(itemKey, `Bắt đầu xử lý hồ sơ: ${patientName}`);
 
         try {
-          await processDocument(detailPage, item);
-        } finally {
-          await detailPage.close().catch(() => {});
-          await page.bringToFront().catch(() => {});
+          const detailPage = await openDocumentRecord(context, item);
+          if (!detailPage) {
+            log.pendingReview(itemKey, `Không mở được chi tiết hồ sơ. Họ tên: ${patientName}`);
+            continue;
+          }
+
+          try {
+            await processDocument(detailPage, item);
+          } finally {
+            await detailPage.close().catch(() => {});
+            await page.bringToFront().catch(() => {});
+          }
+        } catch (error) {
+          log.error(itemKey, `Lỗi khi xử lý hồ sơ: ${error.message}`);
         }
-      } catch (error) {
-        log.error(itemKey, `Lỗi khi xử lý hồ sơ: ${error.message}`);
       }
+
+      if (maxProcessItems && processedCount >= maxProcessItems) {
+        log.info('SYSTEM', `[TEST MODE] Đã xử lý xong ${processedCount}/${maxProcessItems} hồ sơ theo giới hạn test.`);
+        break;
+      }
+
+      const hasMoreData = total > 0 ? pageIndex * pageSize < total : items.length >= pageSize;
+      if (!hasMoreData) {
+        log.info('SYSTEM', `Trang ${pageIndex} là trang cuối, không còn dữ liệu tiếp theo.`);
+        break;
+      }
+
+      pageIndex += 1;
+      log.info('SYSTEM', `Xong trang ${pageIndex - 1}. Chuyển sang trang ${pageIndex} để tiếp tục.`);
+      await page.waitForTimeout(2000);
     }
 
-    log.info('SYSTEM', '=== Hoàn tất xử lý hồ sơ ===');
+    log.info('SYSTEM', '=== Hoàn tất xử lý hồ sơ theo từng trang ===');
   } finally {
     await browser.close();
   }
