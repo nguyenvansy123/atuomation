@@ -223,6 +223,77 @@ async function getCurrentUser(page) {
   return currentUser;
 }
 
+function readCurrentUserFromStorageState() {
+  if (!fs.existsSync(STORAGE_STATE_PATH)) {
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(STORAGE_STATE_PATH, 'utf8');
+    const state = JSON.parse(raw);
+    const origin = state.origins?.find((item) => item.origin === 'https://bvrhm.hosoyte.com');
+    const currentUserEntry = (origin?.localStorage || []).find((item) => item.name === 'currentUser');
+    if (!currentUserEntry?.value) {
+      return null;
+    }
+
+    const parsed = JSON.parse(currentUserEntry.value);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function submitSignedRecordToManager(context, item, itemKey, patientName) {
+  const recordId = getRecordId(item);
+  const savedUser = readCurrentUserFromStorageState();
+  const userId = savedUser?.id || savedUser?.Id || savedUser?.userId || null;
+  const domain = savedUser?.Domain || '79415';
+  const token = savedUser?.access_token || null;
+
+  if (!recordId) {
+    log.warn(itemKey, `Không có ID hồ sơ để gọi API gửi trưởng khoa. Họ tên: ${patientName}`);
+    return { ok: false, reason: 'missing_record_id' };
+  }
+
+  if (!userId) {
+    log.warn(itemKey, `Không tìm thấy id của người dùng trong storageState.json. Họ tên: ${patientName}`);
+    return { ok: false, reason: 'missing_user_id' };
+  }
+
+  const url = `https://bvrhm.hosoyte.com/api/${domain}/dieutri//${recordId}/guitruongkhoa?idBenhAn=${recordId}&idCanBo=${userId}&action=4`;
+
+  try {
+    const response = await context.request.fetch(url, {
+      method: 'DELETE',
+      headers: {
+        authorization: token ? `Bearer ${token}` : undefined,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const text = await response.text();
+    let parsedText = text;
+
+    try {
+      parsedText = JSON.parse(text);
+    } catch (error) {
+      // giữ nguyên text thuần nếu không phải JSON
+    }
+
+    if (!response.ok()) {
+      log.error(itemKey, `API gửi trưởng khoa thất bại: HTTP ${response.status()} - ${JSON.stringify(parsedText)}`);
+      return { ok: false, status: response.status(), body: parsedText };
+    }
+
+    log.info(itemKey, `Đã gửi trưởng khoa thành công cho hồ sơ ${recordId}. URL: ${url}`);
+    return { ok: true, status: response.status(), body: parsedText };
+  } catch (error) {
+    log.error(itemKey, `Lỗi khi gọi API gửi trưởng khoa: ${error.message}`);
+    return { ok: false, reason: 'request_failed', error: error.message };
+  }
+}
+
 /**
  * Gọi API lấy 1 trang dữ liệu theo pageIndex.
  */
@@ -433,7 +504,81 @@ async function clickOutsideModal(page) {
   return false;
 }
 
-async function processDocument(page, item) {
+async function clickReceiverSignerFallback(page, itemKey, patientName) {
+  const quickSigner = page.locator('button[title="Ký số"]').filter({ hasText: '✍️' }).first();
+  if ((await quickSigner.count()) > 0) {
+    try {
+      await quickSigner.click({ timeout: 10000 });
+      return true;
+    } catch (error) {
+      log.warn(itemKey, `Nút ký số dạng biểu tượng tồn tại nhưng click lỗi: ${error.message}`);
+    }
+  }
+
+  const pageSelect = page
+    .locator('select[name="page"], select[ng-reflect-name="page"], select.form-select.form-select-sm.text-center')
+    .first();
+
+  if ((await pageSelect.count()) > 0) {
+    const optionValues = await pageSelect.locator('option').allTextContents();
+    const hasOptionOne = optionValues.some((text) => normalizeText(text) === '1');
+
+    if (!hasOptionOne) {
+      try {
+        await pageSelect.selectOption({ label: '1' });
+        await page.waitForTimeout(1000);
+      } catch (error) {
+        log.warn(itemKey, `Không chọn option 1 trong select page: ${error.message}`);
+      }
+    }
+  }
+
+  const receiverLabel = page
+    .locator('span')
+    .filter({ hasText: /^Người nhận hồ sơ$/i })
+    .first();
+
+  if ((await receiverLabel.count()) > 0) {
+    try {
+      await receiverLabel.click({ timeout: 10000 });
+      return true;
+    } catch (error) {
+      const box = await receiverLabel.boundingBox().catch(() => null);
+      if (box) {
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        return true;
+      }
+      log.warn(itemKey, `Không click được chữ Người nhận hồ sơ: ${error.message}`);
+    }
+  }
+
+  const unassignedLabel = page
+    .locator('span, div, td, li, a')
+    .filter({ hasText: /Chưa nhận hồ sơ|chua nhan ho so/i })
+    .first();
+
+  if ((await unassignedLabel.count()) > 0) {
+    try {
+      await unassignedLabel.click({ timeout: 10000 });
+      return true;
+    } catch (error) {
+      const box = await unassignedLabel.boundingBox().catch(() => null);
+      if (box) {
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        return true;
+      }
+      log.warn(itemKey, `Không click được nhãn Chưa nhận hồ sơ: ${error.message}`);
+    }
+  }
+
+  log.pendingReview(
+    itemKey,
+    `Không tìm thấy nút ký số dạng biểu tượng, không tìm thấy nhãn Người nhận hồ sơ hoặc Chưa nhận hồ sơ. Họ tên: ${patientName}`
+  );
+  return false;
+}
+
+async function processDocument(page, context, item) {
   const itemKey = cleanLogValue(item.MaYTe || item.id || item.MaBenhAn || 'UNKNOWN');
   const patientName = cleanLogValue(item.HoTenBenhNhan || item.HoTenBN || '');
 
@@ -491,20 +636,28 @@ async function processDocument(page, item) {
     return 'chua_hoan_thien';
   }
 
+  const glyphReceiverSigner = page.locator('button[title="Ký số"]').filter({ hasText: '✍️' }).first();
   const receiverSigner = page.locator(
     'button[title*="Ký số Người nhận hồ sơ" i], button[title*="Ký số người nhận hồ sơ" i], button[title*="ký số người nhận hồ sơ" i]'
   ).first();
-  if (!(await receiverSigner.count())) {
-    log.pendingReview(itemKey, `Không thấy nút ký số người nhận hồ sơ trên "${REQUIRED_DOC_NAME}". Họ tên: ${patientName}`);
-    return 'can_xem_lai';
-  }
 
   try {
-    await receiverSigner.click();
+    if ((await glyphReceiverSigner.count()) > 0) {
+      await glyphReceiverSigner.click({ timeout: 10000 });
+    } else if ((await receiverSigner.count()) > 0) {
+      await receiverSigner.click({ timeout: 10000 });
+    } else {
+      const fallbackWorked = await clickReceiverSignerFallback(page, itemKey, patientName);
+      if (!fallbackWorked) {
+        log.pendingReview(itemKey, `Không thấy nút ký số người nhận hồ sơ trên "${REQUIRED_DOC_NAME}". Họ tên: ${patientName}`);
+        return 'can_xem_lai';
+      }
+    }
   } catch (error) {
     log.error(itemKey, `Không click được nút ký số người nhận hồ sơ: ${error.message}`);
     return 'can_xem_lai';
   }
+
   await page.waitForTimeout(8000);
   await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT_MS }).catch(() => {});
 
@@ -656,14 +809,32 @@ async function processDocument(page, item) {
   await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT_MS }).catch(() => {});
 
   // Xác nhận việc ký thực sự thành công bằng cách đọc lại sidebar,
-  // thay vì mặc định thành công chỉ vì đã click xong các nút.
+  // nhưng không được bỏ qua việc gọi API gửi lưu trữ chỉ vì sidebar chưa cập nhật kịp.
   const afterSignState = await evaluateSidebarState(page);
-  if (afterSignState.hasUnsign) {
+  const submitResult = await submitSignedRecordToManager(context, item, itemKey, patientName);
+
+  if (afterSignState.hasUnsign && !submitResult.ok) {
     log.incomplete(
       itemKey,
-      `Đã thao tác ký nhưng "${REQUIRED_DOC_NAME}" vẫn đang ở trạng thái chưa ký sau khi xác nhận. Họ tên: ${patientName}`
+      `Đã thao tác ký và cố gắng gửi lưu trữ nhưng "${REQUIRED_DOC_NAME}" vẫn đang ở trạng thái chưa ký sau khi xác nhận. Họ tên: ${patientName}. Kết quả gửi lưu trữ: ${JSON.stringify(submitResult)}`
     );
     return 'chua_hoan_thien';
+  }
+
+  if (afterSignState.hasUnsign && submitResult.ok) {
+    log.info(
+      itemKey,
+      `Sidebar vẫn chưa cập nhật, nhưng API gửi lưu trữ đã thành công cho hồ sơ ${getRecordId(item) || '(không có id)'}. Họ tên: ${patientName}.`
+    );
+    return 'da_ky_ho_so';
+  }
+
+  if (!submitResult.ok) {
+    log.pendingReview(
+      itemKey,
+      `Đã ký xong nhưng gọi API gửi trưởng khoa thất bại cho hồ sơ ${getRecordId(item) || '(không có id)'}: ${JSON.stringify(submitResult)}`
+    );
+    return 'can_xem_lai';
   }
 
   log.signed(itemKey, `Đã ký hồ sơ thành công cho ${patientName}.`);
@@ -731,7 +902,7 @@ async function processDocument(page, item) {
           }
 
           try {
-            await processDocument(detailPage, item);
+            await processDocument(detailPage, context, item);
           } finally {
             await detailPage.close().catch(() => {});
             await page.bringToFront().catch(() => {});
