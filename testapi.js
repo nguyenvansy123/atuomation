@@ -196,6 +196,17 @@ async function injectApiTestUI(page) {
   await injectApiTestUI(page);
 
   console.log('Menu test API đã được chèn vào trang web target.');
-  console.log('Giữ cửa sổ browser mở để dùng chức năng test API.');
-  await new Promise(() => {});
+  console.log('Giữ cửa sổ browser mở để dùng chức năng test API. Nhấn Ctrl+C để đóng.');
+
+  await new Promise((resolve) => {
+    process.stdin.resume();
+    process.on('SIGINT', async () => {
+      try {
+        await browser.close();
+      } catch (error) {
+        // ignore
+      }
+      resolve();
+    });
+  });
 })();
