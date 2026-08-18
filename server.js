@@ -13,10 +13,41 @@ const {
 const app = express();
 const port = Number(process.env.PORT) || 3000;
 const host = process.env.HOST || '0.0.0.0';
+const storageStatePath = path.join(__dirname, 'storageState.json');
 const store = createDataStore(path.join(__dirname, 'filtered-data.json'));
+
+function readAccessTokenFromStorageState() {
+  try {
+    if (!fs.existsSync(storageStatePath)) return null;
+    const raw = fs.readFileSync(storageStatePath, 'utf8');
+    const state = JSON.parse(raw);
+
+    const origin = (state.origins || []).find((item) => item.origin === 'https://bvrhm.hosoyte.com');
+    const currentUserItem = (origin?.localStorage || []).find((item) => item.name === 'currentUser');
+    if (!currentUserItem?.value) return null;
+
+    const currentUser = JSON.parse(currentUserItem.value);
+    return currentUser?.access_token || null;
+  } catch (error) {
+    return null;
+  }
+}
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/api/session-token', (req, res) => {
+  const token = readAccessTokenFromStorageState();
+
+  if (!token) {
+    return res.status(401).json({
+      ok: false,
+      error: 'Không tìm thấy token trong storageState.json. Hãy đăng nhập trước khi gọi API.',
+    });
+  }
+
+  res.json({ ok: true, token, source: 'storageState.json' });
+});
 
 app.get('/api/records', (req, res) => {
   const records = store.list();
@@ -126,6 +157,58 @@ app.post('/api/run-send-store', (req, res) => {
       filters,
     });
   });
+});
+
+app.post('/api/proxy', async (req, res) => {
+  try {
+    const { method = 'GET', url, body, headers = {} } = req.body || {};
+
+    if (!url) {
+      return res.status(400).json({ ok: false, error: 'Thiếu URL API.' });
+    }
+
+    const authHeader = headers.Authorization || headers.authorization;
+    const init = {
+      method: String(method || 'GET').toUpperCase(),
+      headers: {
+        Accept: 'application/json, text/plain, */*',
+        ...(authHeader ? { Authorization: authHeader } : {}),
+        ...(headers || {}),
+      },
+    };
+
+    if (!['GET', 'HEAD'].includes(init.method)) {
+      const bodyValue = body == null ? undefined : typeof body === 'string' ? body : JSON.stringify(body);
+      if (bodyValue !== undefined) {
+        init.body = bodyValue;
+      }
+    }
+
+    const upstream = await fetch(url, init);
+    const contentType = upstream.headers.get('content-type') || '';
+    const text = await upstream.text();
+    let payload = text;
+
+    if (contentType.includes('application/json')) {
+      try {
+        payload = JSON.parse(text || 'null');
+      } catch (error) {
+        payload = text;
+      }
+    }
+
+    res.status(upstream.status).json({
+      ok: upstream.ok,
+      status: upstream.status,
+      statusText: upstream.statusText,
+      data: payload,
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message || 'Không thể gọi API qua proxy.',
+    });
+  }
 });
 
 app.post('/api/records', (req, res) => {

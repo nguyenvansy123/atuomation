@@ -135,6 +135,77 @@
         background: var(--yellow-strong);
       }
 
+      .api-panel {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 16px;
+      }
+
+      .api-panel h3 {
+        margin: 0 0 12px;
+        font-size: 18px;
+      }
+
+      .api-menu {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .api-row {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr) 140px;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .api-row label {
+        font-weight: 700;
+        color: var(--text);
+      }
+
+      .api-row input {
+        width: 100%;
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-size: 14px;
+      }
+
+      .api-row button,
+      .api-main-button {
+        border: 1px solid #6ba3d2;
+        background: #eaf3ff;
+        color: #123e71;
+        border-radius: 6px;
+        min-height: 38px;
+        padding: 8px 12px;
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      .api-row button:hover,
+      .api-main-button:hover {
+        filter: brightness(0.98);
+      }
+
+      .api-output {
+        margin-top: 12px;
+        background: #111827;
+        color: #e5e7eb;
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 120px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow: auto;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
       .result-table {
         margin-top: 16px;
         background: var(--panel);
@@ -294,6 +365,32 @@
 
           <button id="apply-filter" class="action-button" type="button">Duyệt hàng loạt</button>
         </div>
+      </div>
+
+      <div class="api-panel">
+        <h3>Menu gọi API nhanh</h3>
+
+        <div class="api-menu">
+          <div class="api-row">
+            <label>1. Danh sách hồ sơ</label>
+            <input id="api-list-url" value="https://bvrhm.hosoyte.com/api/79415/dieutri/bachoduyetky?isCapCuu=false&iBaoHiem=2&NamVien=iALL&from=01/01/2026&to=07/31/2026&idKhoa=00000000-0000-0000-0000-000000000000&idCanBo=undefined&maLoaiBenhAn=&strsearch=&iBADT=2&MaTrangThaiNode=DONE&pageIndex=1&pageSize=10&Active=true&TrangThaiKy=ChoDuyet&idTruongKhoaKy=undefined&idNguoiDuyet=undefined" />
+            <button type="button" data-api-command="list">Gọi API</button>
+          </div>
+
+          <div class="api-row">
+            <label>2. Mở hồ sơ</label>
+            <input id="api-detail-url" value="https://bvrhm.hosoyte.com/api/79415/hsbenhan/ba8ff0d0-cd19-4034-b40a-b4410afdac67" />
+            <button type="button" data-api-command="detail">Gọi API</button>
+          </div>
+
+          <div class="api-row">
+            <label>3. Thả chữ ký giao nhận</label>
+            <input id="api-sign-url" value="https://bvrhm.hosoyte.com/api/79415/dieutri//e27af326-e9af-40a6-8063-45af44709944/guitruongkhoa?idBenhAn=e27af326-e9af-40a6-8063-45af44709944&idCanBo=5464b473-9f1c-4826-a7bd-a77bfc2ebc5f&action=4" />
+            <button type="button" data-api-command="sign">Gọi API</button>
+          </div>
+        </div>
+
+        <pre id="api-output" class="api-output">Chưa có kết quả API.</pre>
       </div>
 
       <div class="result-table">
@@ -466,6 +563,75 @@
 
       applyButton.addEventListener('click', () => saveAndRunFilters('/api/run-main', 'automation chính', null, '/api/filter-config'));
       sendStoreButton.addEventListener('click', () => saveAndRunFilters('/api/run-send-store', 'DOM send-store', buildSendStorePayload(), '/api/send-store-filter-config'));
+
+      async function getCurrentToken() {
+        try {
+          const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+          if (user?.access_token) return user.access_token;
+        } catch (error) {
+          // bỏ qua, fallback về server-side token
+        }
+
+        try {
+          const response = await fetch('/api/session-token');
+          const result = await response.json();
+          if (response.ok && result?.token) return result.token;
+        } catch (error) {
+          // không có token nào trên server
+        }
+
+        return '';
+      }
+
+      async function callProxyApi(rawUrl, method = 'GET', body = null) {
+        const outputNode = document.getElementById('api-output');
+        const token = await getCurrentToken();
+
+        if (!token) {
+          outputNode.textContent = 'Không tìm thấy token đăng nhập. Hãy đăng nhập vào trang website target trước khi gọi API.';
+          return;
+        }
+
+        outputNode.textContent = `Đang gọi ${method} ${rawUrl} ...`;
+
+        try {
+          const response = await fetch('/api/proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              method,
+              url: rawUrl,
+              body,
+              headers: { Authorization: `Bearer ${token}` },
+            }),
+          });
+
+          const result = await response.json();
+          outputNode.textContent = JSON.stringify(result, null, 2);
+        } catch (error) {
+          outputNode.textContent = `Lỗi khi gọi API: ${error.message}`;
+        }
+      }
+
+      document.querySelectorAll('[data-api-command]').forEach((button) => {
+        button.addEventListener('click', async () => {
+          const command = button.getAttribute('data-api-command');
+          if (command === 'list') {
+            const url = document.getElementById('api-list-url').value.trim();
+            await callProxyApi(url, 'GET');
+          }
+
+          if (command === 'detail') {
+            const url = document.getElementById('api-detail-url').value.trim();
+            await callProxyApi(url, 'GET');
+          }
+
+          if (command === 'sign') {
+            const url = document.getElementById('api-sign-url').value.trim();
+            await callProxyApi(url, 'DELETE');
+          }
+        });
+      });
 
       async function populateSendStoreDefaults() {
         try {
