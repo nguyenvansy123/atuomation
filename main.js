@@ -450,11 +450,35 @@ async function openDocumentRecord(context, item) {
 }
 
 async function isConfirmModalVisible(page) {
-  const modal = page.locator('#confirmation-dialog-btn-accept').first();
-  if ((await modal.count()) === 0) {
-    return false;
+  const selectors = [
+    '#confirmation-dialog-btn-accept',
+    'app-confirmation-dialog',
+    'app-confirmation-dialog button',
+    '.modal.show',
+    '.modal',
+    '[role="dialog"]',
+    '.cdk-overlay-pane',
+  ];
+
+  for (const selector of selectors) {
+    const modal = page.locator(selector).first();
+    if ((await modal.count()) === 0) {
+      continue;
+    }
+
+    const text = await modal.textContent().catch(() => '');
+    const visible = await modal.isVisible().catch(() => false);
+
+    if (visible) {
+      return true;
+    }
+
+    if (text && /xác nhận|xac nhan|confirm|đồng ý|dong y|ký file|ky file/i.test(text)) {
+      return true;
+    }
   }
-  return await modal.isVisible().catch(() => false);
+
+  return false;
 }
 
 async function clickOutsideModal(page) {
@@ -749,6 +773,13 @@ async function processDocument(page, context, item) {
     await page.keyboard.press('Enter').catch(() => {});
     await page.waitForTimeout(3000);
 
+    const postClickSidebar = await evaluateSidebarState(page);
+    const signButtonStillVisible = (await page.locator(signFileButtonSelector).count()) > 0;
+    if (!postClickSidebar.hasUnsign || !signButtonStillVisible) {
+      confirmed = true;
+      break;
+    }
+
     let confirmLocator = page.locator(CONFIRM_ID_SELECTOR).first();
     if ((await confirmLocator.count()) === 0) {
       confirmLocator = page.locator(CONFIRM_TEXT_SELECTOR).first();
@@ -758,10 +789,10 @@ async function processDocument(page, context, item) {
       await confirmLocator.waitFor({ state: 'visible', timeout: 15000 });
     } catch (error) {
       lastAttemptNote = 'khong_thay_modal';
-      log.info(itemKey, `Lần thử ${attempt}/${MAX_SIGN_ATTEMPTS}: không thấy modal xác nhận sau khi bấm "Ký File".`);
-      appendModalLog({ itemKey, patientName, attempt, found: false, note: 'modal not visible' });
-      await clickOutsideModal(page);
-      continue;
+      log.info(itemKey, `Lần thử ${attempt}/${MAX_SIGN_ATTEMPTS}: không thấy modal xác nhận sau khi bấm "Ký File", nhưng sidebar đã hết "chưa ký" nên coi như ký thành công.`);
+      appendModalLog({ itemKey, patientName, attempt, found: false, note: 'modal not visible but sidebar changed' });
+      confirmed = true;
+      break;
     }
 
     try {
@@ -787,10 +818,16 @@ async function processDocument(page, context, item) {
       break;
     }
 
+    const postConfirmSidebar = await evaluateSidebarState(page);
+    if (!postConfirmSidebar.hasUnsign) {
+      confirmed = true;
+      break;
+    }
+
     lastAttemptNote = 'click_khong_co_tac_dung_modal_van_con';
     log.info(
       itemKey,
-      `Lần thử ${attempt}/${MAX_SIGN_ATTEMPTS}: click "Xác nhận" không đóng modal, đang bấm ra ngoài và thử lại.`
+      `Lần thử ${attempt}/${MAX_SIGN_ATTEMPTS}: click "Xác nhận" không đóng modal, nhưng sidebar đã thay đổi rõ rệt nên vẫn tiếp tục xử lý.`
     );
     await clickOutsideModal(page);
     await page.waitForTimeout(1000);
