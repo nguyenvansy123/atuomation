@@ -17,6 +17,11 @@ const NAV_TIMEOUT_MS = 60_000;
 const REQUIRED_DOC_NAME = 'Phiếu giao nhận hồ sơ bệnh án';
 const PAGE_SIZE = 50;
 
+// Điều chỉnh vị trí click đặt ảnh chữ ký nếu dấu ký lệch so với nhãn.
+// Dương: phải/xuống dưới. Âm: trái/lên trên.
+const SIGNATURE_OFFSET_X = -80;
+const SIGNATURE_OFFSET_Y = 20;
+
 // TEST: giới hạn số hồ sơ xử lý để kiểm tra trước khi chạy full.
 // Đặt null (hoặc 0) để chạy toàn bộ danh sách như bình thường.
 const TEST_LIMIT = 50;
@@ -528,6 +533,286 @@ async function clickOutsideModal(page) {
   return false;
 }
 
+async function debugImageTargetForModal(page) {
+  const targetSelector = 'img#imageid, img.ui-draggable.ui-draggable-handle';
+  const patientCodeSelector = 'span[role="presentation"][dir="ltr"]';
+
+  const targetCount = await page.locator(targetSelector).count();
+  const debug = await page.evaluate(
+    ({ targetSelector, patientCodeSelector }) => {
+      const targetFound = Array.from(document.querySelectorAll(targetSelector));
+      const patientCodeSpans = Array.from(document.querySelectorAll(patientCodeSelector))
+        .filter((span) => /Mã hồ sơ bệnh án:/i.test((span.textContent || '').trim()))
+        .map((span) => ({
+          text: span.textContent,
+          style: {
+            left: span.style.left,
+            top: span.style.top,
+            fontSize: span.style.fontSize,
+            transform: span.style.transform,
+          },
+        }));
+
+      const imgInfo = targetFound.map((image) => {
+        const rect = image.getBoundingClientRect();
+        return {
+          src: image.getAttribute('src'),
+          id: image.id,
+          className: image.className,
+          style: {
+            top: image.style.top,
+            left: image.style.left,
+            position: image.style.position,
+            zIndex: image.style.zIndex,
+            visibility: image.style.visibility,
+          },
+          rect: {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          },
+        };
+      });
+
+      return { targetSelector, targetCount: targetFound.length, patientCodeSpans, imgInfo };
+    },
+    { targetSelector, patientCodeSelector },
+  );
+
+  if (targetCount === 0) {
+    return { ok: false, debug };
+  }
+
+  return { ok: true, debug };
+}
+
+function extractImagePosition(debug) {
+  const img = debug?.imgInfo?.[0];
+  if (!img) return null;
+
+  return {
+    styleLeft: img.style?.left || null,
+    styleTop: img.style?.top || null,
+    rectX: img.rect?.x ?? null,
+    rectY: img.rect?.y ?? null,
+  };
+}
+
+function positionsAreEqual(a, b) {
+  if (!a || !b) return false;
+  const round = (n) => (typeof n === 'number' ? Math.round(n) : n);
+  return (
+    a.styleLeft === b.styleLeft &&
+    a.styleTop === b.styleTop &&
+    round(a.rectX) === round(b.rectX) &&
+    round(a.rectY) === round(b.rectY)
+  );
+}
+
+async function verifySignatureClickMovesImage(page, receiverLabel) {
+  const beforeResult = await debugImageTargetForModal(page);
+  const beforePos = extractImagePosition(beforeResult.debug);
+
+  if (!beforeResult.ok) {
+    return { ok: false, reason: 'no_image_before_click', beforePos, afterPos: null, moved: false };
+  }
+
+  const clicked = await clickSignaturePosition(page, receiverLabel);
+  if (!clicked) {
+    return { ok: false, reason: 'click_failed', beforePos, afterPos: null, moved: false };
+  }
+
+  await page.waitForTimeout(1000);
+
+  const afterResult = await debugImageTargetForModal(page);
+  const afterPos = extractImagePosition(afterResult.debug);
+
+  if (!afterResult.ok) {
+    return {
+      ok: true,
+      beforePos,
+      afterPos: null,
+      moved: true,
+      note: 'image_disappeared_after_click_likely_applied',
+    };
+  }
+
+  const unchanged = positionsAreEqual(beforePos, afterPos);
+  const moved = !unchanged;
+
+  return {
+    ok: true,
+    beforePos,
+    afterPos,
+    moved,
+    beforeDebug: beforeResult.debug,
+    afterDebug: afterResult.debug,
+  };
+}
+
+async function isSignatureGlyphAlreadyPlaced(page) {
+  const selectors = ['button[title="Ký số"]', 'button[title*="Ký số" i]'];
+
+  for (const selector of selectors) {
+    const buttons = page.locator(selector);
+    const count = await buttons.count();
+
+    for (let i = 0; i < count; i += 1) {
+      const info = await buttons.nth(i).evaluate((el) => {
+        const style = window.getComputedStyle(el);
+        const text = (el.textContent || '').trim();
+        const title = (el.getAttribute('title') || '').trim();
+        const isGlyph = /✍️|✍/u.test(text);
+        const isPositioned =
+          style.position === 'absolute' &&
+          style.left !== 'auto' &&
+          style.top !== 'auto' &&
+          Number.parseFloat(style.width || '0') > 0 &&
+          Number.parseFloat(style.height || '0') > 0;
+
+        return {
+          title,
+          text,
+          isGlyph,
+          isPositioned,
+          left: style.left,
+          top: style.top,
+          width: style.width,
+          height: style.height,
+        };
+      });
+
+      if (info?.isGlyph && info?.isPositioned) {
+        log.info('SYSTEM', `[isSignatureGlyphAlreadyPlaced] phát hiện chữ ký đã thả sẵn: ${JSON.stringify(info)}`);
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+async function clickConfirmSignModal(page, itemKey) {
+  const selectors = [
+    '#confirmation-dialog-btn-accept',
+    'button:has-text("Đồng ý")',
+    'button:has-text("Xác nhận")',
+    'button:has-text("Confirm")',
+    'button:has-text("OK")',
+    'button:has-text("Ký File")',
+    'button:has-text("Ky File")',
+    'app-confirmation-dialog button',
+    '.modal button',
+  ];
+
+  for (const selector of selectors) {
+    const button = page.locator(selector).first();
+    if ((await button.count()) === 0) continue;
+
+    try {
+      await button.scrollIntoViewIfNeeded();
+      await button.click({ timeout: 8000, force: true });
+      await page.waitForTimeout(1500);
+      return !(await isConfirmModalVisible(page));
+    } catch (error) {
+      log.warn(itemKey, `Click xác nhận modal selector lỗi: ${selector} — ${error.message}`);
+    }
+  }
+
+  const candidate = page
+    .locator('button')
+    .filter({ hasText: /đồng ý|dong y|xác nhận|xac nhan|confirm|ok|ký file|ky file/i })
+    .first();
+
+  if ((await candidate.count()) > 0) {
+    try {
+      await candidate.scrollIntoViewIfNeeded();
+      await candidate.click({ timeout: 8000, force: true });
+      await page.waitForTimeout(1500);
+      return !(await isConfirmModalVisible(page));
+    } catch (error) {
+      log.warn(itemKey, `Click xác nhận modal fallback lỗi: ${error.message}`);
+    }
+  }
+
+  return false;
+}
+
+async function addClickMarker(page, x, y, label = 'click') {
+  await page.evaluate(
+    ({ x, y, label }) => {
+      const root = document.getElementById('__auto_click_marker_root') || (() => {
+        const el = document.createElement('div');
+        el.id = '__auto_click_marker_root';
+        el.style.position = 'fixed';
+        el.style.left = '0';
+        el.style.top = '0';
+        el.style.width = '100vw';
+        el.style.height = '100vh';
+        el.style.pointerEvents = 'none';
+        el.style.zIndex = '2147483647';
+        document.body.appendChild(el);
+        return el;
+      })();
+
+      const marker = document.createElement('button');
+      marker.type = 'button';
+      marker.textContent = label;
+      marker.style.position = 'fixed';
+      marker.style.left = `${x}px`;
+      marker.style.top = `${y}px`;
+      marker.style.transform = 'translate(-50%, -50%)';
+      marker.style.minWidth = '28px';
+      marker.style.height = '28px';
+      marker.style.border = '2px solid #ef4444';
+      marker.style.borderRadius = '999px';
+      marker.style.background = '#fee2e2';
+      marker.style.color = '#991b1b';
+      marker.style.fontSize = '10px';
+      marker.style.fontWeight = '700';
+      marker.style.padding = '0 8px';
+      marker.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
+      marker.style.cursor = 'default';
+      marker.style.pointerEvents = 'none';
+      marker.style.zIndex = '2147483648';
+      root.appendChild(marker);
+
+      setTimeout(() => {
+        marker.remove();
+      }, 2200);
+    },
+    { x, y, label },
+  );
+}
+
+async function clickSignaturePosition(page, receiverLabel) {
+  try {
+    await receiverLabel.scrollIntoViewIfNeeded();
+
+    const box = await receiverLabel.boundingBox();
+    if (!box) {
+      log.warn('SYSTEM', '[clickSignaturePosition] Không lấy được boundingBox của Người nhận hồ sơ.');
+      return false;
+    }
+
+    const x = box.x + box.width / 2 + SIGNATURE_OFFSET_X;
+    const y = box.y + box.height + SIGNATURE_OFFSET_Y;
+
+    log.info('SYSTEM', `[clickSignaturePosition] click đặt chữ ký tại (${x}, ${y}) với offsetX=${SIGNATURE_OFFSET_X}, offsetY=${SIGNATURE_OFFSET_Y}`);
+
+    await page.mouse.move(x, y, { steps: 10 });
+    await page.mouse.click(x, y);
+    await addClickMarker(page, x, y, 'signature');
+    await page.waitForTimeout(1000);
+
+    return true;
+  } catch (error) {
+    log.warn('SYSTEM', `clickSignaturePosition lỗi: ${error.message}`);
+    return false;
+  }
+}
+
 async function clickReceiverSignerFallback(page, itemKey, patientName) {
   const quickSigner = page.locator('button[title="Ký số"]').filter({ hasText: '✍️' }).first();
   if ((await quickSigner.count()) > 0) {
@@ -664,6 +949,7 @@ async function processDocument(page, context, item) {
   const receiverSigner = page.locator(
     'button[title*="Ký số Người nhận hồ sơ" i], button[title*="Ký số người nhận hồ sơ" i], button[title*="ký số người nhận hồ sơ" i]'
   ).first();
+  const receiverLabel = page.locator('span').filter({ hasText: /^Người nhận hồ sơ$/i }).first();
 
   try {
     if ((await glyphReceiverSigner.count()) > 0) {
@@ -684,6 +970,42 @@ async function processDocument(page, context, item) {
 
   await page.waitForTimeout(8000);
   await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+
+  let modalWasClosed = false;
+  if (await isConfirmModalVisible(page)) {
+    modalWasClosed = await clickOutsideModal(page);
+    if (modalWasClosed) {
+      await page.waitForTimeout(1000);
+    }
+  }
+
+  const hasReceiverLabel = (await receiverLabel.count()) > 0;
+  const alreadyPlacedSignature = await isSignatureGlyphAlreadyPlaced(page);
+  let imageDebug = null;
+  let clickVerification = null;
+
+  if (modalWasClosed && hasReceiverLabel) {
+    if (alreadyPlacedSignature) {
+      log.info(itemKey, 'Phát hiện chữ ký đã thả sẵn sau khi đóng modal, bỏ qua bước click di chuyển ảnh.');
+      imageDebug = { ok: true, debug: null };
+    } else {
+      log.info(itemKey, 'Đang so sánh vị trí ảnh trước/sau khi click đặt chữ ký vào vị trí dưới label Người nhận hồ sơ.');
+      clickVerification = await verifySignatureClickMovesImage(page, receiverLabel);
+
+      if (!clickVerification.ok) {
+        log.warn(itemKey, `click_verification_failed: ${JSON.stringify(clickVerification)}`);
+        return 'can_xem_lai';
+      }
+
+      if (!clickVerification.moved) {
+        log.warn(itemKey, 'Click đặt chữ ký không di chuyển ảnh; cần drag thực sự.');
+        return 'can_xem_lai';
+      }
+
+      log.info(itemKey, 'Click đặt chữ ký thành công, tiếp tục tìm nút Ký File.');
+      imageDebug = { ok: true, debug: clickVerification.afterDebug };
+    }
+  }
 
   const signFileButtonSelector = 'button.btn.btn-sm.btn-warning:has-text("Ký File"), button:has-text("Ký File")';
   const initialSignFileButton = page.locator(signFileButtonSelector).first();
@@ -767,6 +1089,14 @@ async function processDocument(page, context, item) {
       log.error(itemKey, `Lần thử ${attempt}/${MAX_SIGN_ATTEMPTS}: không click được nút "Ký File": ${error.message}`);
       await clickOutsideModal(page);
       continue;
+    }
+
+    await page.waitForTimeout(1500);
+
+    if (await isConfirmModalVisible(page)) {
+      log.info(itemKey, 'Modal xác nhận hiển thị, đang đồng ý ký hồ sơ...');
+      const confirmed = await clickConfirmSignModal(page, itemKey);
+      log.info(itemKey, `Kết quả đồng ý ký hồ sơ: ${confirmed}`);
     }
 
     await page.waitForTimeout(5000);
