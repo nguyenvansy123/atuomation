@@ -11,7 +11,7 @@ const NAV_TIMEOUT_MS = 60_000;
 const PAGE_SIZE = 50;
 const HEADLESS = false;
 const TEST_LIMIT = 20;
-const MAX_PAGE_TURNS = 20;
+const MAX_PAGE_TURNS = 200;
 const SKIPPED_PATIENTS_PATH = path.join(__dirname, 'logs', 'skipped-patients.json');
 
 function normalizeText(value) {

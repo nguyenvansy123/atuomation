@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Giấy ra viện - Mẫu chỉnh sửa</title>
+<style>
+  :root {
+    --ink: #000;
+    --paper-w: 210mm;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", Arial, sans-serif;
+    background: #e5e7eb;
+    color: #111;
+    display: flex;
+    min-height: 100vh;
+  }
+
+  /* ===== Bảng điều khiển bên trái ===== */
+  #panel {
+    width: 360px;
+    flex: 0 0 360px;
+    background: #1f2937;
+    color: #e5e7eb;
+    padding: 16px;
+    overflow-y: auto;
+    height: 100vh;
+    position: sticky;
+    top: 0;
+  }
+  #panel h2 { margin: 0 0 4px; font-size: 16px; }
+  #panel p.hint { margin: 0 0 14px; font-size: 12px; color: #9ca3af; }
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: 12px; margin-bottom: 3px; color: #cbd5e1; }
+  .field input, .field textarea {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #374151;
+    border-radius: 6px;
+    background: #111827;
+    color: #f9fafb;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  .field textarea { resize: vertical; min-height: 54px; }
+  .row2 { display: flex; gap: 8px; }
+  .row2 .field { flex: 1; }
+  .actions {
+    position: sticky;
+    bottom: 0;
+    background: #1f2937;
+    padding-top: 12px;
+    margin-top: 8px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .actions button {
+    flex: 1 1 auto;
+    cursor: pointer;
+    border: 0;
+    border-radius: 6px;
+    padding: 9px 10px;
+    font-size: 13px;
+    color: #fff;
+  }
+  #btnPrint { background: #2563eb; }
+  #btnReset { background: #6b7280; }
+
+  /* ===== Khu vực tờ giấy ===== */
+  #stage {
+    flex: 1;
+    padding: 24px;
+    overflow: auto;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+  }
+  .paper {
+    width: var(--paper-w);
+    min-height: 297mm;
+    background: #fff;
+    padding: 14mm 16mm;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .25);
+    font-family: "Times New Roman", Times, serif;
+    color: var(--ink);
+    font-size: 14pt;
+    line-height: 1.45;
+  }
+
+  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .head .col-left { width: 38%; text-align: center; font-size: 12.5pt; }
+  .head .col-center { width: 36%; text-align: center; font-size: 12.5pt; }
+  .head .col-right { width: 26%; font-size: 11.5pt; line-height: 1.3; }
+  .head .org { font-weight: bold; }
+  .head .khoa { }
+  .head .so-kh { }
+  .head .nation { font-weight: bold; }
+  .head .motto { text-decoration: underline; }
+  .head .col-right div { white-space: nowrap; }
+
+  h1.title {
+    text-align: center;
+    font-size: 18pt;
+    font-weight: bold;
+    margin: 14px 0 16px;
+    letter-spacing: .5px;
+  }
+
+  .line { margin: 3px 0; }
+  .line .lbl { }
+  .val { font-weight: bold; }
+  .inline-group { display: inline; }
+  .sep { display: inline-block; }
+
+  /* Ô số thẻ BHYT */
+  .bhyt-boxes { display: inline-flex; gap: 2px; vertical-align: middle; }
+  .bhyt-boxes span {
+    display: inline-block;
+    width: 20px;
+    height: 22px;
+    border: 1px solid #000;
+    text-align: center;
+    line-height: 22px;
+    font-weight: bold;
+  }
+
+  .foot { margin-top: 14px; }
+  .foot .date-right { text-align: right; font-style: italic; padding-right: 24px; }
+  .sign-row { display: flex; margin-top: 4px; }
+  .sign-col { flex: 1; text-align: center; }
+  .sign-col .role1 { font-weight: bold; }
+  .sign-col .role2 { font-weight: bold; }
+  .sign-col .kyten { color: #9db4d6; margin-top: 6px; font-style: italic; }
+
+  /* ===== In ấn ===== */
+  @page { size: A4; margin: 12mm; }
+  @media print {
+    body { background: #fff; display: block; }
+    #panel { display: none !important; }
+    #stage { padding: 0; display: block; }
+    .paper { box-shadow: none; width: auto; min-height: auto; padding: 0; }
+  }
+</style>
+</head>
+<body>
+  <aside id="panel">
+    <h2>Chỉnh sửa Giấy ra viện</h2>
+    <p class="hint">Sửa các ô bên dưới, tờ giấy bên phải cập nhật ngay. Bấm "In / PDF" để xuất.</p>
+
+    <div class="field"><label>Sở/Đơn vị chủ quản</label><input data-bind="soyte" /></div>
+    <div class="field"><label>Tên bệnh viện</label><input data-bind="benhvien" /></div>
+    <div class="field"><label>Khoa</label><input data-bind="khoa" /></div>
+    <div class="field"><label>Số (góc trái)</label><input data-bind="soKhoa" /></div>
+
+    <div class="row2">
+      <div class="field"><label>MS</label><input data-bind="ms" /></div>
+      <div class="field"><label>Số BA</label><input data-bind="soBA" /></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Số lưu trữ</label><input data-bind="soLuuTru" /></div>
+      <div class="field"><label>Mã Y Tế</label><input data-bind="maYTe" /></div>
+    </div>
+
+    <div class="field"><label>Họ tên người bệnh</label><input data-bind="hoTen" /></div>
+    <div class="row2">
+      <div class="field"><label>Ngày sinh</label><input data-bind="ngaySinh" /></div>
+      <div class="field"><label>Tuổi</label><input data-bind="tuoi" /></div>
+      <div class="field"><label>Giới tính</label><input data-bind="gioiTinh" /></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Dân tộc</label><input data-bind="danToc" /></div>
+      <div class="field"><label>Nghề nghiệp</label><input data-bind="ngheNghiep" /></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Số CCCD/CMND/Hộ chiếu</label><input data-bind="cccd" /></div>
+      <div class="field"><label>Ngày cấp</label><input data-bind="ngayCap" /></div>
+    </div>
+    <div class="field"><label>Mã số BHXH/Thẻ BHYT</label><input data-bind="bhyt" maxlength="15" /></div>
+    <div class="field"><label>Địa chỉ</label><textarea data-bind="diaChi"></textarea></div>
+    <div class="field"><label>Vào viện lúc</label><input data-bind="vaoVien" /></div>
+    <div class="field"><label>Ra viện lúc</label><input data-bind="raVien" /></div>
+    <div class="field"><label>Chẩn đoán</label><textarea data-bind="chanDoan"></textarea></div>
+    <div class="field"><label>Phương pháp điều trị</label><textarea data-bind="phuongPhap"></textarea></div>
+    <div class="field"><label>Phẫu thuật viên chính</label><input data-bind="pttv" /></div>
+    <div class="field"><label>Bác sĩ điều trị</label><input data-bind="bsDieuTri" /></div>
+    <div class="field"><label>Ghi chú</label><textarea data-bind="ghiChu"></textarea></div>
+
+    <div class="field"><label>Ngày ký (dòng phải)</label><input data-bind="ngayKy" /></div>
+    <div class="row2">
+      <div class="field"><label>Chức danh trái</label><input data-bind="signLeftRole1" /></div>
+      <div class="field"><label>Chức vụ trái</label><input data-bind="signLeftRole2" /></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Chức danh phải</label><input data-bind="signRightRole1" /></div>
+      <div class="field"><label>Chức vụ phải</label><input data-bind="signRightRole2" /></div>
+    </div>
+
+    <div class="actions">
+      <button id="btnPrint" type="button">In / PDF</button>
+      <button id="btnReset" type="button">Khôi phục mẫu</button>
+    </div>
+  </aside>
+
+  <main id="stage">
+    <section class="paper" id="paper">
+      <div class="head">
+        <div class="col-left">
+          <div class="org"><span data-out="soyte"></span></div>
+          <div class="org"><span data-out="benhvien"></span></div>
+          <div class="khoa">Khoa: <span data-out="khoa"></span></div>
+          <div class="so-kh">Số:....... <span data-out="soKhoa"></span> .......</div>
+        </div>
+        <div class="col-center">
+          <div class="nation">CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</div>
+          <div class="motto">Độc lập - Tự do - Hạnh phúc</div>
+        </div>
+        <div class="col-right">
+          <div>MS: <span data-out="ms"></span></div>
+          <div>Số BA: <span data-out="soBA"></span></div>
+          <div>Số lưu trữ: <span data-out="soLuuTru"></span></div>
+          <div>Mã Y Tế: <span data-out="maYTe"></span></div>
+        </div>
+      </div>
+
+      <h1 class="title">GIẤY RA VIỆN</h1>
+
+      <div class="line">- Họ tên người bệnh: <span class="val" data-out="hoTen"></span></div>
+      <div class="line">- Ngày/tháng/năm sinh: <span class="val" data-out="ngaySinh"></span>
+        &nbsp;&nbsp;&nbsp; Tuổi: <span class="val" data-out="tuoi"></span>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Giới tính: <span class="val" data-out="gioiTinh"></span></div>
+      <div class="line">- Dân tộc: <span data-out="danToc"></span>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Nghề nghiệp: <span data-out="ngheNghiep"></span></div>
+      <div class="line">- Số CCCD/CMND/Định danh công dân/Hộ Chiếu: <span data-out="cccd"></span>
+        &nbsp;&nbsp;&nbsp; Ngày cấp: <span data-out="ngayCap"></span></div>
+      <div class="line">- Mã số BHXH/Thẻ BHYT số (nếu có):
+        <span class="bhyt-boxes" id="bhytBoxes"></span></div>
+      <div class="line">- Địa chỉ: <span data-out="diaChi"></span></div>
+      <div class="line">- Vào viện lúc: <span data-out="vaoVien"></span></div>
+      <div class="line">- Ra viện lúc: <span data-out="raVien"></span></div>
+      <div class="line">- Chẩn đoán: <span data-out="chanDoan"></span></div>
+      <div class="line">- Phương pháp điều trị: <span data-out="phuongPhap"></span></div>
+      <div class="line">- Phẫu thuật viên chính: <span data-out="pttv"></span></div>
+      <div class="line">- Bác sĩ điều trị: <span data-out="bsDieuTri"></span></div>
+      <div class="line">- Ghi chú: <span class="val" data-out="ghiChu"></span></div>
+
+      <div class="foot">
+        <div class="date-right"><span data-out="ngayKy"></span></div>
+        <div class="sign-row">
+          <div class="sign-col">
+            <div class="role1"><span data-out="signLeftRole1"></span></div>
+            <div class="role2"><span data-out="signLeftRole2"></span></div>
+            <div class="kyten">Ký tên</div>
+          </div>
+          <div class="sign-col">
+            <div class="role1"><span data-out="signRightRole1"></span></div>
+            <div class="role2"><span data-out="signRightRole2"></span></div>
+            <div class="kyten">Ký tên</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+<script>
+  // Dữ liệu mẫu lấy theo ảnh giấy ra viện
+  const DEFAULTS = {
+    soyte: "SỞ Y TẾ TP. HỒ CHÍ MINH",
+    benhvien: "BỆNH VIỆN RĂNG HÀM MẶT",
+    khoa: "Phẫu Thuật Hàm Mặt",
+    soKhoa: "07069/26",
+    ms: "02-TT25-BYT",
+    soBA: "BA26073193",
+    soLuuTru: "PTHM.1.26.002473",
+    maYTe: "79415.26032197",
+    hoTen: "ĐOÀN BÙI QUỐC THÀNH",
+    ngaySinh: "03/08/2000",
+    tuoi: "26",
+    gioiTinh: "Nam",
+    danToc: "Kinh",
+    ngheNghiep: "Khác",
+    cccd: "017200000071",
+    ngayCap: "25/03/2025",
+    bhyt: "",
+    diaChi: "Tp Thắng Lợi, Xã Giao Thủy, tỉnh Ninh Bình",
+    vaoVien: "08 giờ 13 phút, ngày 19 tháng 08 năm 2026",
+    raVien: "14 giờ 00 phút, ngày 21 tháng 08 năm 2026",
+    chanDoan: "Nang nhầy môi dưới trái (K11.6)",
+    phuongPhap: "Phẫu thuật cắt nang nhầy môi dưới trái; gửi giải phẫu bệnh",
+    pttv: "TS. BS.Phạm Nguyễn Gia Lộc",
+    bsDieuTri: "ThS. BSCKI. Đoàn Cao Quốc Duy",
+    ghiChu: "Được nghỉ từ ngày 22/08/2026 đến ngày 28/08/2026 để dưỡng bệnh. Tái khám ngày 28/08/2026 lúc 14h00 tại Bệnh viện (mang theo giấy ra viện + toa thuốc)",
+    ngayKy: "Ngày 21 tháng 08 năm 2026",
+    signLeftRole1: "Đại diện đơn vị",
+    signLeftRole2: "GIÁM ĐỐC",
+    signRightRole1: "Người hành nghề khám bệnh, chữa bệnh",
+    signRightRole2: "TRƯỞNG KHOA",
+  };
+
+  const BHYT_LEN = 15;
+
+  function renderBhytBoxes(value) {
+    const wrap = document.getElementById("bhytBoxes");
+    wrap.innerHTML = "";
+    const chars = (value || "").padEnd(BHYT_LEN, " ").slice(0, BHYT_LEN).split("");
+    chars.forEach((c) => {
+      const b = document.createElement("span");
+      b.textContent = c.trim();
+      wrap.appendChild(b);
+    });
+  }
+
+  function setField(key, value) {
+    document.querySelectorAll(`[data-out="${key}"]`).forEach((el) => {
+      el.textContent = value;
+    });
+    if (key === "bhyt") renderBhytBoxes(value);
+  }
+
+  function applyAll(data) {
+    Object.keys(DEFAULTS).forEach((key) => {
+      const input = document.querySelector(`[data-bind="${key}"]`);
+      if (input) input.value = data[key] ?? "";
+      setField(key, data[key] ?? "");
+    });
+  }
+
+  // Gắn sự kiện nhập liệu
+  document.querySelectorAll("[data-bind]").forEach((input) => {
+    input.addEventListener("input", () => setField(input.dataset.bind, input.value));
+  });
+
+  document.getElementById("btnPrint").addEventListener("click", () => window.print());
+  document.getElementById("btnReset").addEventListener("click", () => applyAll(DEFAULTS));
+
+  applyAll(DEFAULTS);
+</script>
+</body>
+</html>

@@ -24,7 +24,7 @@ const SIGNATURE_OFFSET_Y = 20;
 
 // TEST: giới hạn số hồ sơ xử lý để kiểm tra trước khi chạy full.
 // Đặt null (hoặc 0) để chạy toàn bộ danh sách như bình thường.
-const TEST_LIMIT = 50;
+const TEST_LIMIT = 0;
 
 function formatApiDate(date) {
   return new Date(date).toISOString().slice(0, 19).replace('T', ' ');
