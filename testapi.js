@@ -666,6 +666,36 @@ async function clickSignaturePosition(page, receiverLabel) {
   }
 }
 
+async function selectPageOption(page, value = "1") {
+  try {
+    const pageSelect = page.locator('select[name="page"]').first();
+    if ((await pageSelect.count()) === 0) {
+      console.warn('[selectPageOption] Không tìm thấy thẻ select[name="page"].');
+      return false;
+    }
+
+    await pageSelect.scrollIntoViewIfNeeded().catch(() => {});
+    const selected = await pageSelect.selectOption(value).catch((error) => {
+      console.warn("[selectPageOption] selectOption lỗi:", error.message);
+      return null;
+    });
+
+    if (!selected) {
+      return false;
+    }
+
+    console.log(`[selectPageOption] Đã chọn option "${value}" cho select[name="page"].`);
+    await page.waitForTimeout(1500);
+    await page
+      .waitForLoadState("networkidle", { timeout: 30000 })
+      .catch(() => {});
+    return true;
+  } catch (error) {
+    console.warn("[selectPageOption] Lỗi:", error.message);
+    return false;
+  }
+}
+
 async function clickReceiverSignerFallback(page) {
   const quickSigner = page
     .locator('button[title="Ký số"]')
@@ -844,18 +874,49 @@ async function signRecordById(page, context, recordId) {
 
       if (!clickVerification.moved) {
         console.warn(
-          "[signRecordById] ❌ Click KHÔNG di chuyển được ảnh chữ ký. Cần dùng kéo-thả (drag) thật sự thay vì click. Dừng flow tại đây để bạn xem log.",
+          "[signRecordById] ❌ Click KHÔNG di chuyển được ảnh chữ ký. Thử chọn option 1 ở select[name=\"page\"] rồi click thả chữ ký lại...",
         );
-        return {
-          ok: false,
-          reason: "click_did_not_move_image_need_drag",
-          clickVerification,
-        };
-      }
 
-      console.log(
-        "[signRecordById] ✅ Click đã di chuyển ảnh chữ ký thành công. Tiếp tục tìm nút Ký File.",
-      );
+        const pageSelected = await selectPageOption(page, "1");
+        if (!pageSelected) {
+          console.warn(
+            "[signRecordById] Không chọn được option 1 ở select[name=\"page\"]. Dừng flow để bạn xem log.",
+          );
+          return {
+            ok: false,
+            reason: "click_did_not_move_image_need_drag",
+            clickVerification,
+          };
+        }
+
+        console.log(
+          "[signRecordById] Đã chọn trang 1, thử lại click thả chữ ký...",
+        );
+        const retryVerification = await verifySignatureClickMovesImage(
+          page,
+          receiverLabel,
+        );
+
+        if (!retryVerification.ok || !retryVerification.moved) {
+          console.warn(
+            "[signRecordById] ❌ Sau khi chọn trang 1, click vẫn KHÔNG di chuyển được ảnh chữ ký. Cần dùng kéo-thả (drag) thật sự. Dừng flow tại đây để bạn xem log.",
+          );
+          return {
+            ok: false,
+            reason: "click_did_not_move_image_need_drag",
+            clickVerification: retryVerification,
+          };
+        }
+
+        console.log(
+          "[signRecordById] ✅ Sau khi chọn trang 1, click đã di chuyển ảnh chữ ký thành công. Tiếp tục tìm nút Ký File.",
+        );
+        clickVerification = retryVerification;
+      } else {
+        console.log(
+          "[signRecordById] ✅ Click đã di chuyển ảnh chữ ký thành công. Tiếp tục tìm nút Ký File.",
+        );
+      }
 
       // Vẫn giữ lại 1 bản debug cuối để log/return giống hành vi cũ.
       imageDebug = { ok: true, debug: clickVerification.afterDebug };

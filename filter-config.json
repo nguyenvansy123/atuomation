@@ -1,11 +1,11 @@
 {
   "pageSize": "10",
   "from": "2025-02-27 00:00:00",
-  "to": "2026-09-03 23:59:59",
+  "to": "2026-09-12 23:59:59",
   "iBaoHiem": "2",
   "isCapCuu": "false",
   "NamVien": "false",
-  "idKhoa": "3fcf4d70-0ede-4c9e-9fb4-ba2ea7963d8b",
+  "idKhoa": "866315ab-f814-460e-9364-f8e3c3cb15a4",
   "maLoaiBenhAn": "",
   "strsearch": "",
   "Active": "true",
@@ -15,5 +15,5 @@
   "idNguoiDuyet": "undefined",
   "idCanBo": "undefined",
   "iBADT": "2",
-  "idKhoaDieuTri": "3fcf4d70-0ede-4c9e-9fb4-ba2ea7963d8b"
+  "idKhoaDieuTri": "866315ab-f814-460e-9364-f8e3c3cb15a4"
 }

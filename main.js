@@ -6,6 +6,7 @@ const { getDefaultFilters, readFilterConfig } = require('./filter-config');
 
 const STORAGE_STATE_PATH = './storageState.json';
 const MODAL_LOG_PATH = path.join(__dirname, 'logs', 'modal-confirm.log');
+const SKIPPED_RECORDS_PATH = path.join(__dirname, 'logs', 'skipped-records.json');
 const LIST_PAGE_URL =
   'https://bvrhm.hosoyte.com/v2/#/HSBA/DsBenhAnChoKy?TrangThai=ChoDuyet';
 const LOGIN_URL = 'https://bvrhm.hosoyte.com/v2/';
@@ -95,6 +96,50 @@ function appendModalLog(entry) {
   }
   const line = `${new Date().toISOString()}\n${JSON.stringify(entry, null, 2)}\n---\n`;
   fs.appendFileSync(MODAL_LOG_PATH, line, 'utf8');
+}
+
+function readSkippedRecords() {
+  try {
+    if (!fs.existsSync(SKIPPED_RECORDS_PATH)) return [];
+    const raw = fs.readFileSync(SKIPPED_RECORDS_PATH, 'utf8').trim();
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+// Lưu lại hồ sơ không thả được chữ ký / không gửi lưu trữ được để chuyển sang hồ sơ khác.
+// Ghi đè theo recordId/itemKey nếu đã tồn tại để không phình file khi chạy lại.
+function appendSkippedRecord({ item, itemKey, patientName, status, reason }) {
+  const logsDir = path.dirname(SKIPPED_RECORDS_PATH);
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
+
+  const records = readSkippedRecords();
+  const recordId = getRecordId(item) || null;
+  const entry = {
+    recordId,
+    itemKey,
+    patientName,
+    status,
+    reason,
+    detailUrl: buildDetailUrl(item),
+    savedAt: new Date().toISOString(),
+  };
+
+  const existingIndex = records.findIndex(
+    (record) => (recordId && record.recordId === recordId) || record.itemKey === itemKey
+  );
+  if (existingIndex >= 0) {
+    records[existingIndex] = entry;
+  } else {
+    records.push(entry);
+  }
+
+  fs.writeFileSync(SKIPPED_RECORDS_PATH, JSON.stringify(records, null, 2), 'utf8');
 }
 
 async function logModalDomState(page, itemKey, patientName, phase, attempt = null) {
@@ -813,6 +858,40 @@ async function clickSignaturePosition(page, receiverLabel) {
   }
 }
 
+async function selectPageOption(page, itemKey, value = '1') {
+  try {
+    const pageSelect = page
+      .locator('select[name="page"], select[ng-reflect-name="page"], select.form-select.form-select-sm.text-center')
+      .first();
+
+    if ((await pageSelect.count()) === 0) {
+      log.warn(itemKey, '[selectPageOption] Không tìm thấy thẻ select[name="page"].');
+      return false;
+    }
+
+    await pageSelect.scrollIntoViewIfNeeded().catch(() => {});
+    const selected = await pageSelect.selectOption(value).catch(async (error) => {
+      log.warn(itemKey, `[selectPageOption] selectOption theo value lỗi: ${error.message}`);
+      return await pageSelect.selectOption({ label: value }).catch((err) => {
+        log.warn(itemKey, `[selectPageOption] selectOption theo label lỗi: ${err.message}`);
+        return null;
+      });
+    });
+
+    if (!selected) {
+      return false;
+    }
+
+    log.info(itemKey, `[selectPageOption] Đã chọn option "${value}" cho select[name="page"].`);
+    await page.waitForTimeout(1500);
+    await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+    return true;
+  } catch (error) {
+    log.warn(itemKey, `[selectPageOption] Lỗi: ${error.message}`);
+    return false;
+  }
+}
+
 async function clickReceiverSignerFallback(page, itemKey, patientName) {
   const quickSigner = page.locator('button[title="Ký số"]').filter({ hasText: '✍️' }).first();
   if ((await quickSigner.count()) > 0) {
@@ -998,11 +1077,28 @@ async function processDocument(page, context, item) {
       }
 
       if (!clickVerification.moved) {
-        log.warn(itemKey, 'Click đặt chữ ký không di chuyển ảnh; cần drag thực sự.');
-        return 'can_xem_lai';
+        log.warn(itemKey, 'Click đặt chữ ký không di chuyển ảnh; thử chọn trang 1 ở select[name="page"] rồi click lại.');
+
+        const pageSelected = await selectPageOption(page, itemKey, '1');
+        if (!pageSelected) {
+          log.warn(itemKey, 'Không chọn được trang 1 ở select[name="page"]; cần drag thực sự.');
+          return 'can_xem_lai';
+        }
+
+        log.info(itemKey, 'Đã chọn trang 1, thử lại click đặt chữ ký.');
+        const retryVerification = await verifySignatureClickMovesImage(page, receiverLabel);
+
+        if (!retryVerification.ok || !retryVerification.moved) {
+          log.warn(itemKey, `Sau khi chọn trang 1, click vẫn không di chuyển ảnh; cần drag thực sự: ${JSON.stringify(retryVerification)}`);
+          return 'can_xem_lai';
+        }
+
+        log.info(itemKey, 'Sau khi chọn trang 1, click đặt chữ ký thành công, tiếp tục tìm nút Ký File.');
+        clickVerification = retryVerification;
+      } else {
+        log.info(itemKey, 'Click đặt chữ ký thành công, tiếp tục tìm nút Ký File.');
       }
 
-      log.info(itemKey, 'Click đặt chữ ký thành công, tiếp tục tìm nút Ký File.');
       imageDebug = { ok: true, debug: clickVerification.afterDebug };
     }
   }
@@ -1227,75 +1323,100 @@ async function processDocument(page, context, item) {
     });
 
     const currentUser = await getCurrentUser(page);
-    const pageSize = Number(BASE_FILTERS.pageSize || PAGE_SIZE) || PAGE_SIZE;
     const maxProcessItems = TEST_LIMIT && TEST_LIMIT > 0 ? TEST_LIMIT : null;
 
-    let pageIndex = 1;
-    let processedCount = 0;
-    let total = 0;
+    // Lấy snapshot toàn bộ danh sách MỘT LẦN trước khi xử lý.
+    // Trước đây vòng lặp fetch theo từng trang trong lúc vừa ký vừa gửi lưu trữ:
+    // mỗi hồ sơ ký xong sẽ rời khỏi danh sách "chờ duyệt" trên server, khiến các trang
+    // sau bị dồn/đảo vị trí và bỏ sót hồ sơ. Chụp snapshot cố định rồi mở chi tiết theo
+    // ID nên danh sách server thay đổi cũng không gây sót/đảo dữ liệu.
+    log.info('SYSTEM', 'Đang tải snapshot toàn bộ danh sách hồ sơ trước khi xử lý (tránh sót/đảo vị trí)...');
+    const { total, items: allItems } = await fetchAllItems(context, currentUser);
 
-    log.info('SYSTEM', `Bắt đầu xử lý từng trang, mỗi trang xử lý xong mới chuyển sang trang tiếp theo.`);
-
-    while (true) {
-      const pageData = await fetchItemsPage(context, currentUser, pageIndex);
-      const items = Array.isArray(pageData?.items) ? pageData.items : [];
-      total = Number(pageData?.total) || total || 0;
-
-      if (!items.length) {
-        log.info('SYSTEM', `Trang ${pageIndex} không còn dữ liệu, dừng xử lý.`);
-        break;
-      }
-
-      log.info('SYSTEM', `=== Xử lý trang ${pageIndex}${total ? `/${Math.ceil(total / pageSize)}` : ''} ===`);
-
-      for (const item of items) {
-        if (maxProcessItems && processedCount >= maxProcessItems) {
-          log.info('SYSTEM', `[TEST MODE] Đã xử lý đủ ${maxProcessItems} hồ sơ, dừng.`);
-          return;
-        }
-
-        processedCount += 1;
-
-        const itemKey = cleanLogValue(item.MaYTe || item.id || item.MaBenhAn || 'UNKNOWN');
-        const patientName = cleanLogValue(item.HoTenBenhNhan || item.HoTenBN || '');
-
-        log.info(itemKey, `Bắt đầu xử lý hồ sơ: ${patientName}`);
-
-        try {
-          const detailPage = await openDocumentRecord(context, item);
-          if (!detailPage) {
-            log.pendingReview(itemKey, `Không mở được chi tiết hồ sơ. Họ tên: ${patientName}`);
-            continue;
-          }
-
-          try {
-            await processDocument(detailPage, context, item);
-          } finally {
-            await detailPage.close().catch(() => {});
-            await page.bringToFront().catch(() => {});
-          }
-        } catch (error) {
-          log.error(itemKey, `Lỗi khi xử lý hồ sơ: ${error.message}`);
-        }
-      }
-
-      if (maxProcessItems && processedCount >= maxProcessItems) {
-        log.info('SYSTEM', `[TEST MODE] Đã xử lý xong ${processedCount}/${maxProcessItems} hồ sơ theo giới hạn test.`);
-        break;
-      }
-
-      const hasMoreData = total > 0 ? pageIndex * pageSize < total : items.length >= pageSize;
-      if (!hasMoreData) {
-        log.info('SYSTEM', `Trang ${pageIndex} là trang cuối, không còn dữ liệu tiếp theo.`);
-        break;
-      }
-
-      pageIndex += 1;
-      log.info('SYSTEM', `Xong trang ${pageIndex - 1}. Chuyển sang trang ${pageIndex} để tiếp tục.`);
-      await page.waitForTimeout(2000);
+    // Loại trùng theo ID hồ sơ để không xử lý lại cùng một hồ sơ trong snapshot.
+    const seenIds = new Set();
+    const uniqueItems = [];
+    for (const rawItem of allItems) {
+      const dedupKey =
+        getRecordId(rawItem) ||
+        cleanLogValue(rawItem.MaYTe || rawItem.HoTenBenhNhan || rawItem.HoTenBN || JSON.stringify(rawItem));
+      if (seenIds.has(dedupKey)) continue;
+      seenIds.add(dedupKey);
+      uniqueItems.push(rawItem);
     }
 
-    log.info('SYSTEM', '=== Hoàn tất xử lý hồ sơ theo từng trang ===');
+    log.info(
+      'SYSTEM',
+      `Đã tải snapshot ${uniqueItems.length} hồ sơ (server báo total=${total || 'không rõ'}). Bắt đầu xử lý lần lượt.`
+    );
+
+    let processedCount = 0;
+
+    for (const item of uniqueItems) {
+      if (maxProcessItems && processedCount >= maxProcessItems) {
+        log.info('SYSTEM', `[TEST MODE] Đã xử lý đủ ${maxProcessItems} hồ sơ, dừng.`);
+        break;
+      }
+
+      processedCount += 1;
+
+      const itemKey = cleanLogValue(item.MaYTe || item.id || item.MaBenhAn || 'UNKNOWN');
+      const patientName = cleanLogValue(item.HoTenBenhNhan || item.HoTenBN || '');
+
+      log.info(itemKey, `Bắt đầu xử lý hồ sơ ${processedCount}/${uniqueItems.length}: ${patientName}`);
+
+      try {
+        const detailPage = await openDocumentRecord(context, item);
+        if (!detailPage) {
+          log.pendingReview(itemKey, `Không mở được chi tiết hồ sơ. Họ tên: ${patientName}`);
+          appendSkippedRecord({
+            item,
+            itemKey,
+            patientName,
+            status: 'khong_mo_duoc_chi_tiet',
+            reason: 'Không mở được chi tiết hồ sơ.',
+          });
+          continue;
+        }
+
+        try {
+          const status = await processDocument(detailPage, context, item);
+
+          // Hồ sơ không thả được chữ ký / không gửi lưu trữ được: lưu vào JSON rồi chuyển sang hồ sơ khác.
+          if (status !== 'da_ky_ho_so') {
+            const reasonMap = {
+              can_xem_lai: 'Không thả được chữ ký hoặc không gửi lưu trữ được (cần xem lại).',
+              chua_hoan_thien: 'Hồ sơ chưa hoàn thiện, không thể ký/gửi lưu trữ tự động.',
+            };
+            appendSkippedRecord({
+              item,
+              itemKey,
+              patientName,
+              status,
+              reason: reasonMap[status] || `Bỏ qua với trạng thái: ${status}`,
+            });
+            log.info(
+              itemKey,
+              `Đã ghi hồ sơ vào ${path.basename(SKIPPED_RECORDS_PATH)} (trạng thái ${status}) và chuyển sang hồ sơ khác.`
+            );
+          }
+        } finally {
+          await detailPage.close().catch(() => {});
+          await page.bringToFront().catch(() => {});
+        }
+      } catch (error) {
+        log.error(itemKey, `Lỗi khi xử lý hồ sơ: ${error.message}`);
+        appendSkippedRecord({
+          item,
+          itemKey,
+          patientName,
+          status: 'loi_xu_ly',
+          reason: error.message,
+        });
+      }
+    }
+
+    log.info('SYSTEM', `=== Hoàn tất xử lý ${processedCount} hồ sơ theo snapshot ===`);
   } finally {
     await browser.close();
   }

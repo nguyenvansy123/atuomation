@@ -87,18 +87,19 @@
     box-shadow: 0 6px 24px rgba(0, 0, 0, .25);
     font-family: "Times New Roman", Times, serif;
     color: var(--ink);
-    font-size: 14pt;
+    font-size: 10px;
     line-height: 1.45;
   }
 
   .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-  .head .col-left { width: 38%; text-align: center; font-size: 12.5pt; }
-  .head .col-center { width: 36%; text-align: center; font-size: 12.5pt; }
-  .head .col-right { width: 26%; font-size: 11.5pt; line-height: 1.3; }
+  .head .col-left { width: 32%; text-align: center; font-size: 11px; }
+  .head .col-center { width: 42%; text-align: center; font-size: 11px; }
+  .head .col-right { width: 24%; font-size: 11px; line-height: 1.35; }
+  .head .unit { }
   .head .org { font-weight: bold; }
   .head .khoa { }
   .head .so-kh { }
-  .head .nation { font-weight: bold; }
+  .head .nation { font-weight: bold; white-space: nowrap; font-size: 11px; }
   .head .motto { text-decoration: underline; }
   .head .col-right div { white-space: nowrap; }
 
@@ -137,12 +138,13 @@
   .sign-col .kyten { color: #9db4d6; margin-top: 6px; font-style: italic; }
 
   /* ===== In ấn ===== */
-  @page { size: A4; margin: 12mm; }
+  @page { size: A4; margin: 0; }
   @media print {
     body { background: #fff; display: block; }
     #panel { display: none !important; }
     #stage { padding: 0; display: block; }
-    .paper { box-shadow: none; width: auto; min-height: auto; padding: 0; }
+    /* Giữ đúng kích thước tờ giấy như bản xem màn hình để in không bị co nhỏ */
+    .paper { box-shadow: none; width: 210mm; min-height: 297mm; padding: 14mm 16mm; }
   }
 </style>
 </head>
@@ -209,7 +211,7 @@
     <section class="paper" id="paper">
       <div class="head">
         <div class="col-left">
-          <div class="org"><span data-out="soyte"></span></div>
+          <div class="unit"><span data-out="soyte"></span></div>
           <div class="org"><span data-out="benhvien"></span></div>
           <div class="khoa">Khoa: <span data-out="khoa"></span></div>
           <div class="so-kh">Số:....... <span data-out="soKhoa"></span> .......</div>
