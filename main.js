@@ -4,6 +4,15 @@ const path = require('path');
 const log = require('./logger');
 const { getDefaultFilters, readFilterConfig } = require('./filter-config');
 
+// An toàn: nếu không bắt các lỗi này, Node sẽ âm thầm thoát tiến trình
+// (kịch bản "chạy được 1 lúc rồi dừng") mà không ghi log nguyên nhân.
+process.on('unhandledRejection', (reason) => {
+  log.error('SYSTEM', `Unhandled rejection: ${reason?.stack || reason}`);
+});
+process.on('uncaughtException', (error) => {
+  log.error('SYSTEM', `Uncaught exception: ${error?.stack || error}`);
+});
+
 const STORAGE_STATE_PATH = './storageState.json';
 const MODAL_LOG_PATH = path.join(__dirname, 'logs', 'modal-confirm.log');
 const SKIPPED_RECORDS_PATH = path.join(__dirname, 'logs', 'skipped-records.json');
@@ -17,6 +26,8 @@ const HEADLESS = false; // true để chạy ẩn, false để mở trình duy�
 const NAV_TIMEOUT_MS = 60_000;
 const REQUIRED_DOC_NAME = 'Phiếu giao nhận hồ sơ bệnh án';
 const PAGE_SIZE = 50;
+const FETCH_BATCH_SIZE = PAGE_SIZE;
+let batchFetchFailed = false;
 
 // Điều chỉnh vị trí click đặt ảnh chữ ký nếu dấu ký lệch so với nhãn.
 // Dương: phải/xuống dưới. Âm: trái/lên trên.
@@ -26,6 +37,13 @@ const SIGNATURE_OFFSET_Y = 20;
 // TEST: giới hạn số hồ sơ xử lý để kiểm tra trước khi chạy full.
 // Đặt null (hoặc 0) để chạy toàn bộ danh sách như bình thường.
 const TEST_LIMIT = 0;
+
+// Script chạy nhiều giờ, xử lý hàng nghìn hồ sơ (mỗi hồ sơ mở 1 tab mới)
+// khiến Chromium rò rỉ bộ nhớ dần rồi crash (đã từng xảy ra: log dừng đột
+// ngột ở hồ sơ ~1056/2409 với lỗi "Target...has been closed"/"Failed to
+// open a new tab"). Chủ động khởi động lại trình duyệt định kỳ để giải
+// phóng bộ nhớ, tránh tích tụ tới mức gây crash.
+const RESTART_BROWSER_EVERY_N_ITEMS = 150;
 
 function formatApiDate(date) {
   return new Date(date).toISOString().slice(0, 19).replace('T', ' ');
@@ -80,6 +98,12 @@ function buildDetailUrl(item) {
   const id = getRecordId(item);
   if (!id) return null;
   return DETAIL_URL_TEMPLATE.replace('{id}', encodeURIComponent(id));
+}
+
+// Sleep thuần JS, KHÔNG phụ thuộc vào `page` — vì nếu trình duyệt đã
+// chết/đóng thì gọi page.waitForTimeout() cũng sẽ ném lỗi theo.
+function nghiMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeText(str) {
@@ -259,6 +283,33 @@ async function ensureAuthenticated(browser) {
   await loginContext.close();
 }
 
+// Nhận diện các lỗi cho thấy trình duyệt/tab/context đã bị đóng hoặc
+// crash (khác với lỗi nghiệp vụ bình thường như "không tìm thấy nút").
+function isBrowserDeadError(error) {
+  const msg = String(error?.message || error || '');
+  return /Target page, context or browser has been closed|Target closed|Protocol error.*Target\.createTarget|Browser has disconnected|Connection closed|browserContext\.newPage/i.test(
+    msg
+  );
+}
+
+// Đóng trình duyệt cũ (nếu còn) và mở 1 trình duyệt mới, khôi phục session
+// từ storageState.json, rồi vào lại trang danh sách — dùng cho cả việc
+// khởi động lại định kỳ (giải phóng bộ nhớ) lẫn tự phục hồi khi phát hiện
+// trình duyệt đã chết giữa chừng.
+async function launchBrowserAndContext(oldBrowser) {
+  if (oldBrowser) {
+    await oldBrowser.close().catch(() => {});
+  }
+  const browser = await chromium.launch({ headless: HEADLESS });
+  const context = await browser.newContext({
+    storageState: STORAGE_STATE_PATH,
+    ignoreHTTPSErrors: true,
+  });
+  const page = await context.newPage();
+  await page.goto(LIST_PAGE_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+  return { browser, context, page };
+}
+
 async function getCurrentUser(page) {
   await page.waitForFunction(() => localStorage.getItem('currentUser'), null, {
     timeout: NAV_TIMEOUT_MS,
@@ -397,6 +448,41 @@ async function fetchAllItems(context, currentUser) {
   }
 
   return { total, items: allItems };
+}
+
+async function collectNextItemsBatch(context, currentUser, seenIds, batchSize = FETCH_BATCH_SIZE) {
+  const batch = [];
+  let pageIndex = 1;
+  let total = 0;
+  let scannedCount = 0;
+
+  while (batch.length < batchSize) {
+    const page = await fetchItemsPage(context, currentUser, pageIndex);
+    const items = Array.isArray(page.items) ? page.items : [];
+    total = Number(page.total) || total || 0;
+
+    if (!items.length) break;
+
+    scannedCount += items.length;
+
+    for (const item of items) {
+      const recordId = getRecordId(item);
+      const dedupKey = recordId || cleanLogValue(item.MaYTe || item.HoTenBenhNhan || item.HoTenBN || JSON.stringify(item));
+      if (seenIds.has(dedupKey)) continue;
+
+      seenIds.add(dedupKey);
+      batch.push(item);
+
+      if (batch.length >= batchSize) break;
+    }
+
+    // Không dừng chỉ vì trang trả về ít hơn PAGE_SIZE: pageSize thực tế (từ filter-config.json)
+    // có thể nhỏ hơn PAGE_SIZE, nếu dừng ở đây sẽ chỉ quét được trang 1 rồi báo "hoàn tất" sớm.
+    if (total > 0 && scannedCount >= total) break;
+    pageIndex += 1;
+  }
+
+  return { total, items: batch, scannedPages: pageIndex };
 }
 
 async function waitForSidebarReady(page, timeoutMs = 20_000) {
@@ -1305,16 +1391,16 @@ async function processDocument(page, context, item) {
 }
 
 (async () => {
-  const browser = await chromium.launch({ headless: HEADLESS });
+  let browser = await chromium.launch({ headless: HEADLESS });
 
   try {
     await ensureAuthenticated(browser);
 
-    const context = await browser.newContext({
+    let context = await browser.newContext({
       storageState: STORAGE_STATE_PATH,
       ignoreHTTPSErrors: true,
     });
-    const page = await context.newPage();
+    let page = await context.newPage();
 
     log.info('SYSTEM', `=== Bắt đầu xử lý hồ sơ ngoại trú từ ${FILTER_FROM} đến ${FILTER_TO} ===`);
     await page.goto(LIST_PAGE_URL, {
@@ -1324,99 +1410,182 @@ async function processDocument(page, context, item) {
 
     const currentUser = await getCurrentUser(page);
     const maxProcessItems = TEST_LIMIT && TEST_LIMIT > 0 ? TEST_LIMIT : null;
-
-    // Lấy snapshot toàn bộ danh sách MỘT LẦN trước khi xử lý.
-    // Trước đây vòng lặp fetch theo từng trang trong lúc vừa ký vừa gửi lưu trữ:
-    // mỗi hồ sơ ký xong sẽ rời khỏi danh sách "chờ duyệt" trên server, khiến các trang
-    // sau bị dồn/đảo vị trí và bỏ sót hồ sơ. Chụp snapshot cố định rồi mở chi tiết theo
-    // ID nên danh sách server thay đổi cũng không gây sót/đảo dữ liệu.
-    log.info('SYSTEM', 'Đang tải snapshot toàn bộ danh sách hồ sơ trước khi xử lý (tránh sót/đảo vị trí)...');
-    const { total, items: allItems } = await fetchAllItems(context, currentUser);
-
-    // Loại trùng theo ID hồ sơ để không xử lý lại cùng một hồ sơ trong snapshot.
     const seenIds = new Set();
-    const uniqueItems = [];
-    for (const rawItem of allItems) {
-      const dedupKey =
-        getRecordId(rawItem) ||
-        cleanLogValue(rawItem.MaYTe || rawItem.HoTenBenhNhan || rawItem.HoTenBN || JSON.stringify(rawItem));
-      if (seenIds.has(dedupKey)) continue;
-      seenIds.add(dedupKey);
-      uniqueItems.push(rawItem);
-    }
 
-    log.info(
-      'SYSTEM',
-      `Đã tải snapshot ${uniqueItems.length} hồ sơ (server báo total=${total || 'không rõ'}). Bắt đầu xử lý lần lượt.`
-    );
+    log.info('SYSTEM', 'Bắt đầu lấy hồ sơ theo từng batch nhỏ từ API, không tải toàn bộ danh sách trước.');
 
     let processedCount = 0;
 
-    for (const item of uniqueItems) {
+    while (true) {
       if (maxProcessItems && processedCount >= maxProcessItems) {
         log.info('SYSTEM', `[TEST MODE] Đã xử lý đủ ${maxProcessItems} hồ sơ, dừng.`);
         break;
       }
 
-      processedCount += 1;
+      const remainingLimit = maxProcessItems ? maxProcessItems - processedCount : FETCH_BATCH_SIZE;
+      const batchSize = Math.min(FETCH_BATCH_SIZE, remainingLimit || FETCH_BATCH_SIZE);
 
-      const itemKey = cleanLogValue(item.MaYTe || item.id || item.MaBenhAn || 'UNKNOWN');
-      const patientName = cleanLogValue(item.HoTenBenhNhan || item.HoTenBN || '');
+      // Retry khi gọi API danh sách lỗi (mạng chập chờn, token hết hạn...)
+      // thay vì để lỗi rơi xuống ngoài và làm dừng toàn bộ script.
+      let batchResult = null;
+      let batchAttempt = 0;
+      const MAX_BATCH_RETRIES = 3;
+      while (batchAttempt < MAX_BATCH_RETRIES) {
+        try {
+          batchResult = await collectNextItemsBatch(context, currentUser, seenIds, batchSize);
+          break;
+        } catch (error) {
+          batchAttempt += 1;
+          log.error(
+            'SYSTEM',
+            `Lỗi khi lấy danh sách hồ sơ (lần ${batchAttempt}/${MAX_BATCH_RETRIES}): ${error.message}`
+          );
+          if (isBrowserDeadError(error)) {
+            log.error('SYSTEM', 'Phát hiện trình duyệt bị đóng/crash khi lấy danh sách. Đang khởi động lại...');
+            try {
+              ({ browser, context, page } = await launchBrowserAndContext(browser));
+              log.info('SYSTEM', 'Đã khởi động lại trình duyệt thành công.');
+            } catch (relaunchError) {
+              log.error('SYSTEM', `Khởi động lại trình duyệt thất bại: ${relaunchError.message}`);
+            }
+          }
+          if (batchAttempt >= MAX_BATCH_RETRIES) {
+            log.error('SYSTEM', 'Đã thử lại tối đa số lần cho phép khi lấy danh sách hồ sơ. Dừng vòng lặp.');
+            batchFetchFailed = true;
+            break;
+          }
+          await nghiMs(5000);
+        }
+      }
 
-      log.info(itemKey, `Bắt đầu xử lý hồ sơ ${processedCount}/${uniqueItems.length}: ${patientName}`);
+      if (!batchResult) break;
+      const { total, items, scannedPages } = batchResult;
 
-      try {
-        const detailPage = await openDocumentRecord(context, item);
-        if (!detailPage) {
-          log.pendingReview(itemKey, `Không mở được chi tiết hồ sơ. Họ tên: ${patientName}`);
-          appendSkippedRecord({
-            item,
-            itemKey,
-            patientName,
-            status: 'khong_mo_duoc_chi_tiet',
-            reason: 'Không mở được chi tiết hồ sơ.',
-          });
-          continue;
+      if (!items.length) {
+        log.info('SYSTEM', `Không còn hồ sơ mới chưa xử lý sau khi quét ${scannedPages} trang. Dừng.`);
+        break;
+      }
+
+      log.info(
+        'SYSTEM',
+        `Nhận ${items.length} hồ sơ mới từ API sau khi quét ${scannedPages} trang (server báo total hiện tại=${total || 'không rõ'}).`
+      );
+
+      for (const item of items) {
+        if (maxProcessItems && processedCount >= maxProcessItems) {
+          log.info('SYSTEM', `[TEST MODE] Đã xử lý đủ ${maxProcessItems} hồ sơ, dừng.`);
+          break;
         }
 
-        try {
-          const status = await processDocument(detailPage, context, item);
+        processedCount += 1;
 
-          // Hồ sơ không thả được chữ ký / không gửi lưu trữ được: lưu vào JSON rồi chuyển sang hồ sơ khác.
-          if (status !== 'da_ky_ho_so') {
-            const reasonMap = {
-              can_xem_lai: 'Không thả được chữ ký hoặc không gửi lưu trữ được (cần xem lại).',
-              chua_hoan_thien: 'Hồ sơ chưa hoàn thiện, không thể ký/gửi lưu trữ tự động.',
-            };
+        const itemKey = cleanLogValue(item.MaYTe || item.id || item.MaBenhAn || 'UNKNOWN');
+        const patientName = cleanLogValue(item.HoTenBenhNhan || item.HoTenBN || '');
+
+        log.info(itemKey, `Bắt đầu xử lý hồ sơ ${processedCount}: ${patientName}`);
+
+        let daXuLyXong = false;
+        let soLanThuDoCrash = 0;
+        const TOI_DA_THU_LAI_KHI_CRASH = 2; // trình duyệt chết giữa chừng -> khởi động lại và thử lại hồ sơ này tối đa 2 lần
+
+        while (!daXuLyXong) {
+          try {
+            const detailPage = await openDocumentRecord(context, item);
+            if (!detailPage) {
+              log.pendingReview(itemKey, `Không mở được chi tiết hồ sơ. Họ tên: ${patientName}`);
+              appendSkippedRecord({
+                item,
+                itemKey,
+                patientName,
+                status: 'khong_mo_duoc_chi_tiet',
+                reason: 'Không mở được chi tiết hồ sơ.',
+              });
+              daXuLyXong = true;
+              break;
+            }
+
+            try {
+              const status = await processDocument(detailPage, context, item);
+
+              if (status !== 'da_ky_ho_so') {
+                const reasonMap = {
+                  can_xem_lai: 'Không thả được chữ ký hoặc không gửi lưu trữ được (cần xem lại).',
+                  chua_hoan_thien: 'Hồ sơ chưa hoàn thiện, không thể ký/gửi lưu trữ tự động.',
+                };
+                appendSkippedRecord({
+                  item,
+                  itemKey,
+                  patientName,
+                  status,
+                  reason: reasonMap[status] || `Bỏ qua với trạng thái: ${status}`,
+                });
+                log.info(
+                  itemKey,
+                  `Đã ghi hồ sơ vào ${path.basename(SKIPPED_RECORDS_PATH)} (trạng thái ${status}) và chuyển sang hồ sơ khác.`
+                );
+              }
+            } finally {
+              await detailPage.close().catch(() => {});
+              await page.bringToFront().catch(() => {});
+            }
+            daXuLyXong = true;
+          } catch (error) {
+            if (isBrowserDeadError(error) && soLanThuDoCrash < TOI_DA_THU_LAI_KHI_CRASH) {
+              soLanThuDoCrash += 1;
+              log.error(
+                itemKey,
+                `Phát hiện trình duyệt bị đóng/crash khi xử lý hồ sơ: ${error.message}. Đang khởi động lại trình duyệt (lần ${soLanThuDoCrash}/${TOI_DA_THU_LAI_KHI_CRASH}) rồi thử lại hồ sơ này...`
+              );
+              try {
+                ({ browser, context, page } = await launchBrowserAndContext(browser));
+                log.info('SYSTEM', 'Đã khởi động lại trình duyệt thành công, thử lại hồ sơ hiện tại.');
+                continue; // thử lại chính hồ sơ này với browser/context/page mới
+              } catch (relaunchError) {
+                log.error('SYSTEM', `Khởi động lại trình duyệt thất bại: ${relaunchError.message}`);
+              }
+            }
+
+            log.error(itemKey, `Lỗi khi xử lý hồ sơ: ${error.message}`);
             appendSkippedRecord({
               item,
               itemKey,
               patientName,
-              status,
-              reason: reasonMap[status] || `Bỏ qua với trạng thái: ${status}`,
+              status: 'loi_xu_ly',
+              reason: error.message,
             });
-            log.info(
-              itemKey,
-              `Đã ghi hồ sơ vào ${path.basename(SKIPPED_RECORDS_PATH)} (trạng thái ${status}) và chuyển sang hồ sơ khác.`
+            daXuLyXong = true;
+          }
+        }
+
+        // Chủ động khởi động lại trình duyệt định kỳ để giải phóng bộ nhớ,
+        // tránh tích tụ dẫn tới crash khi chạy liên tục nhiều giờ.
+        if (processedCount % RESTART_BROWSER_EVERY_N_ITEMS === 0) {
+          log.info(
+            'SYSTEM',
+            `Đã xử lý ${processedCount} hồ sơ, chủ động khởi động lại trình duyệt để giải phóng bộ nhớ...`
+          );
+          try {
+            ({ browser, context, page } = await launchBrowserAndContext(browser));
+            log.info('SYSTEM', 'Khởi động lại trình duyệt định kỳ thành công.');
+          } catch (error) {
+            log.error(
+              'SYSTEM',
+              `Khởi động lại trình duyệt định kỳ thất bại: ${error.message}. Tiếp tục với trình duyệt hiện tại.`
             );
           }
-        } finally {
-          await detailPage.close().catch(() => {});
-          await page.bringToFront().catch(() => {});
         }
-      } catch (error) {
-        log.error(itemKey, `Lỗi khi xử lý hồ sơ: ${error.message}`);
-        appendSkippedRecord({
-          item,
-          itemKey,
-          patientName,
-          status: 'loi_xu_ly',
-          reason: error.message,
-        });
       }
     }
 
-    log.info('SYSTEM', `=== Hoàn tất xử lý ${processedCount} hồ sơ theo snapshot ===`);
+    if (batchFetchFailed) {
+      log.error('SYSTEM', `=== DỪNG SỚM do không lấy được danh sách hồ sơ (đã xử lý ${processedCount} hồ sơ) ===`);
+      process.exitCode = 1;
+    } else {
+      log.info('SYSTEM', `=== Hoàn tất xử lý ${processedCount} hồ sơ theo từng batch ===`);
+    }
+  } catch (error) {
+    log.error('SYSTEM', `Script dừng vì lỗi không xử lý được: ${error?.stack || error}`);
+    process.exitCode = 1;
   } finally {
     await browser.close();
   }
