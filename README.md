@@ -1,5 +1,13 @@
 # Browser Automation - Khung sườn (scaffold)
 
+## Bộ tải phim độc lập
+
+Phần tải phim theo Excel được tách riêng trong [AutoDownload](./AutoDownload/README.md).
+Dùng `AutoDownload\CaiDat.cmd` để cài, điền `AutoDownload\config.json`, rồi
+chạy `AutoDownload\Chay.cmd`. Không cần cài hoặc chạy giao diện/server của dự án này.
+Điểm chạy cũ `node AutoDownload.js` vẫn sử dụng Excel và downloads theo thư mục
+chạy hiện tại, nhưng tài khoản lấy từ cấu hình riêng hoặc biến môi trường.
+
 ## Cài đặt (chạy 1 lần)
 
 ```bash

@@ -12,6 +12,9 @@ storageState.json
 output.jsonl
 logs/
 *.log
+downloads/
+download/
+AtuDownload/
 
 # OS files
 .DS_Store
@@ -31,3 +34,6 @@ temp/
 
 # Optional: keep repo clean
 npm-debug.log*
+
+# Standalone distribution
+AutoDownload-Windows.zip

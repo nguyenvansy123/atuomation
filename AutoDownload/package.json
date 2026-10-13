@@ -1,0 +1,17 @@
+{
+  "name": "pacs-autodownload",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone PACS downloads from an Excel patient list",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node AutoDownload.js",
+    "prepare-files": "node setup.js"
+  },
+  "dependencies": {
+    "exceljs": "4.4.0",
+    "playwright": "1.62.1"
+  }
+}
