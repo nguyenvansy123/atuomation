@@ -1,5 +1,91 @@
 # Browser Automation - Khung sườn (scaffold)
 
+## Auto ký Trưởng khoa / ủy quyền Giám đốc
+
+Script độc lập [auto-sign-director.js](./auto-sign-director.js), không thay đổi
+[main.js](./main.js) hay bản extension [demo/content.js](./demo/content.js).
+Dùng tài khoản riêng, không dùng hay ghi đè phiên đăng nhập của script cũ.
+Đăng nhập tài khoản Trưởng khoa/ủy quyền Giám đốc:
+
+```powershell
+node auto-sign-director.js --login
+```
+
+Lệnh này mở trình duyệt với phiên trống. Đăng nhập bằng tài khoản cần ký,
+rồi nhấn Enter tại terminal để lưu riêng vào `storageState.director.json`.
+Chỉ lưu khi có thông tin phiên đăng nhập hợp lệ; không thực hiện ký/gửi.
+File phiên riêng được loại khỏi Git vì chứa thông tin xác thực.
+Khi cần đổi tài khoản hoặc phiên hết hạn, chạy lại lệnh trên. Phiên
+`storageState.json` của script cũ được giữ nguyên. Không kết hợp `--login`
+với `--execute` hoặc `--limit`.
+
+Chạy kiểm tra trước (không bấm ký, không gửi):
+
+```powershell
+node auto-sign-director.js --limit 5
+```
+
+Script mở trực tiếp [Danh sách chờ ký (Trưởng khoa)](https://bvrhm.hosoyte.com/v2/#/HSBA/DsBenhAnChoKy?TrangThai=ChoKyTruongKhoa).
+Chỉ cho phép chạy tại trang có `TrangThai=ChoKyTruongKhoa`, không chạy trên
+danh sách `ChoDuyet`. Đặt bộ lọc như mong muốn và tải danh sách, rồi nhấn Enter
+tại terminal. Không đổi bộ lọc
+hoặc thao tác ký/gửi thủ công trong lúc script chạy.
+
+Chạy ký thật, nên thử một hồ sơ trước:
+
+```powershell
+node auto-sign-director.js --execute --limit 1
+```
+
+Bỏ `--limit` để xử lý toàn bộ danh sách đã lọc. Script chốt ID trên tất cả
+trang trước khi ký, sau đó tìm lại từng hồ sơ để tránh bỏ sót khi gửi làm
+thay đổi phân trang.
+
+Quy tắc:
+
+- Mở hồ sơ, đưa tab lên màn hình và tự bấm mục **Phiếu bệnh án (chưa ký)**
+  trên thanh bên (khác với **Phiếu giao nhận hồ sơ bệnh án**). Chờ mục này
+  được chọn và nhận phản hồi API `/api/{Domain}/hsdikembenhan/hsDiKem/{recordId}`
+  do thao tác mở phiếu phát sinh; không kiểm tra ngay khi chưa mở Phiếu bệnh án.
+  Kiểm tra **tất cả phiếu**, chỉ **Phiếu giao nhận hồ sơ bệnh án** và
+  **Thông tin hành chính** được phép có `IsDaKySo === false`. Nếu bất kỳ
+  phiếu nào khác có giá trị `false`, bỏ qua hồ sơ trước khi mở phiếu giao
+  nhận, ghi rõ tên phiếu chưa ký. Không dùng thông báo của nút **Kiểm tra**
+  làm điều kiện đủ thay cho API.
+- Các phiếu có `IsDaKySo === true` được ghi nhận đã ký số. Giá trị `null`
+  không thuộc danh sách `false` theo quy tắc này và được ghi riêng, không
+  tự coi là đã ký. Kiểu dữ liệu lạ hoặc thiếu trường vẫn gây lỗi rõ ràng.
+- Chỉ khi đạt quy tắc API mới mở phiếu giao nhận, bấm đúng nút có title hoặc tên truy cập
+  **Ký số Trưởng khoa ký ủy quyền Giám đốc**. Không ký Thông tin hành chính,
+  không dùng nút người giao/người nhận và không tự đặt ảnh chữ ký.
+- Xác minh `IsDaKySo` qua API trước khi bấm **Gửi ký hồ sơ**, rồi chỉ
+  chấp nhận hộp thoại xác nhận gửi phù hợp, không chấp nhận cảnh báo.
+  Các phiếu khác có thể có `IsDaKySo: null`; điều này không làm hỏng việc
+  đọc danh sách và không bị quy đổi thành đã ký/chưa ký. Riêng phiếu giao
+  nhận phải có trạng thái boolean rõ ràng; nếu `null` thì không ký/gửi.
+- Sau khi xác minh phiếu giao nhận đã ký, đọc lại API và kiểm tra toàn bộ
+  phiếu một lần nữa trước khi gửi. Nếu có phiếu khác chuyển sang `false`,
+  không gửi hồ sơ. Thông tin hành chính có thể vẫn `false` theo quy tắc
+  đã chọn, nhưng script không tự xác nhận các cảnh báo của hệ thống.
+- Kiểm tra lại API danh sách với bộ lọc đã chọn: chỉ ghi nhận hoàn tất
+  khi hồ sơ không còn trong danh sách. Nếu đã xác nhận gửi nhưng không
+  xác minh được, dừng chạy để kiểm tra thủ công, không tự gửi lại.
+- Phiếu trùng tên hoặc API đã báo phiếu được ký từ trước: không ký/gửi lại;
+  cần kiểm tra thủ công chữ ký theo vai trò.
+
+Kết quả nối thêm vào `logs/auto-sign-director.jsonl`; lỗi được ghi bằng logger
+hiện có và chụp ảnh trang chi tiết trong `logs`. Các file này chứa thông tin
+hồ sơ, cần bảo quản như dữ liệu y tế. Chế độ kiểm tra chỉ kiểm tra điều kiện
+và nút ký, không chứng minh rằng thao tác ký/gửi thật sẽ thành công.
+Kết quả có `check.unsignedDocuments`, `check.blockingDocuments` và
+`check.nullStatusDocuments` để đối chiếu điều kiện từ API.
+
+Kiểm thử bằng giao diện/API giả lập, không gọi máy chủ bệnh viện:
+
+```powershell
+node --test tests\auto-sign-director.test.js
+```
+
 ## Bộ tải phim độc lập
 
 Phần tải phim theo Excel được tách riêng trong [AutoDownload](./AutoDownload/README.md).
