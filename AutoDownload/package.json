@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node AutoDownload.js",
+    "test": "node --test tests\\session.test.js",
     "prepare-files": "node setup.js"
   },
   "dependencies": {

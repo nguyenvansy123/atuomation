@@ -2,4 +2,4 @@
 // Giữ danh_sach.xlsx và downloads theo thư mục chạy hiện tại.
 process.env.PACS_EXCEL ||= require('path').resolve('danh_sach.xlsx');
 process.env.PACS_THU_MUC_TAI ||= require('path').resolve('downloads');
-require('./AutoDownload/AutoDownload');
+require('./AutoDownload/AutoDownload').chay();

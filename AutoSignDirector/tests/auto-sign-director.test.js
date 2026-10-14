@@ -6,17 +6,19 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const {
   DOCUMENT_NAME, SIGN_TITLE, checkDocumentEligibility, parseOptions, targetDocument,
-  signAndSend, acceptAction, isRecordInList, collectRecords, locateRecord,
+  signAndSend, acceptAction, isRecordInList, collectRecords, refreshList,
   STORAGE_STATE_PATH, saveLoginSession,
   LIST_URL, isTargetListPage,
   parseDocuments,
   MEDICAL_CHART_NAME,
+  transferSignatureState,
+  ADMINISTRATIVE_NAME, administrativeSignatureState,
 } = require('../auto-sign-director');
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_ID = '22222222-2222-4222-8222-222222222222';
-const warning = fs.readFileSync(path.join(__dirname, '..', 'demo', 'modal_warrning.html'), 'utf8');
-const sendModal = fs.readFileSync(path.join(__dirname, '..', 'demo', 'modal.html'), 'utf8');
+const warning = fs.readFileSync(path.join(__dirname, 'fixtures', 'modal_warrning.html'), 'utf8');
+const sendModal = fs.readFileSync(path.join(__dirname, 'fixtures', 'modal.html'), 'utf8');
 
 test('opens and allows only the requested department-head waiting list', () => {
   assert.equal(LIST_URL, 'https://bvrhm.hosoyte.com/v2/#/HSBA/DsBenhAnChoKy?TrangThai=ChoKyTruongKhoa');
@@ -93,6 +95,47 @@ test('observed nullable statuses on unrelated documents do not invalidate the ta
   }
 });
 
+test('transfer signatures use exact role positions, not aggregate status or a signed PDF', () => {
+  const positions = [
+    { MaViTri: 'NguoiGiaoHoSo', IsDaKy: true },
+    { MaViTri: 'NguoiNhanHoSo', IsDaKy: false },
+  ];
+  assert.deepEqual(transferSignatureState({
+    IsDaKySo: false, IsDaKy: false, UrlFileKySo: 'signed.pdf', HSDiKemViTriKy: positions,
+  }), { senderSigned: true, receiverSigned: false });
+  assert.deepEqual(transferSignatureState({ HSDiKemViTriKy: [
+    { MaViTri: 'NguoiGiaoHoSo', IsDaKy: false },
+    { MaViTri: 'NguoiNhanHoSo', IsDaKy: true },
+  ] }), { senderSigned: false, receiverSigned: true });
+  for (const value of [undefined, null, '[]', [], [positions[0]], [positions[1]],
+    [...positions, positions[0]], [...positions, positions[1]],
+    [{ ...positions[0], IsDaKy: 'true' }, positions[1]],
+    [positions[0], { ...positions[1], IsDaKy: null }]]) {
+    assert.throws(() => transferSignatureState({ IsDaKySo: true, HSDiKemViTriKy: value }));
+  }
+});
+
+test('administrative signatures use exact doctor and department-head roles', () => {
+  const document = {
+    Ten: ADMINISTRATIVE_NAME, IsDaKySo: true,
+    HSDiKemViTriKy: [
+      { MaViTri: 'BacSi', IsDaKy: true },
+      { MaViTri: 'TruongKhoa', IsDaKy: false },
+    ],
+  };
+  assert.deepEqual(administrativeSignatureState([document]), {
+    doctorSigned: true, departmentHeadSigned: false,
+  });
+  assert.throws(() => administrativeSignatureState([]), /đúng một mục/);
+  assert.throws(() => administrativeSignatureState([document, document]), /đúng một mục/);
+  for (const positions of [undefined, null, [], [document.HSDiKemViTriKy[0]],
+    [...document.HSDiKemViTriKy, document.HSDiKemViTriKy[1]],
+    [{ MaViTri: 'BacSi', IsDaKy: 'true' }, document.HSDiKemViTriKy[1]],
+    [document.HSDiKemViTriKy[0], { MaViTri: 'TruongKhoa', IsDaKy: null }]]) {
+    assert.throws(() => administrativeSignatureState([{ ...document, HSDiKemViTriKy: positions }]));
+  }
+});
+
 async function fixture(t, options = {}) {
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -106,9 +149,28 @@ async function fixture(t, options = {}) {
     const url = new URL(route.request().url());
     if (url.pathname.includes('/hsdikembenhan/hsDiKem/')) {
       calls.push('documents');
+      if (signed && options.rejectDocumentsAfterSign) {
+        await route.fulfill({ status: 500, body: 'Document API must not be read after signing' });
+        return;
+      }
       await route.fulfill({ json: [
-        { Ten: DOCUMENT_NAME, IsDaKySo: options.targetUnknown ? null : signed || !!options.alreadySigned },
-        ...(signed && options.afterSignDocuments ? options.afterSignDocuments : options.extraDocuments || []),
+        {
+          Ten: DOCUMENT_NAME,
+          IsDaKySo: options.targetUnknown ? null : !!options.alreadySigned,
+          HSDiKemViTriKy: [
+            { MaViTri: 'NguoiGiaoHoSo', IsDaKy: !options.senderUnsigned },
+            { MaViTri: 'NguoiNhanHoSo', IsDaKy: !!options.receiverSigned },
+          ],
+        },
+        ...(options.adminMissing ? [] : [{
+          Ten: ADMINISTRATIVE_NAME,
+          IsDaKySo: !!options.adminAggregateSigned,
+          HSDiKemViTriKy: options.adminPositions || [
+            { MaViTri: 'BacSi', IsDaKy: !options.doctorUnsigned },
+            { MaViTri: 'TruongKhoa', IsDaKy: !!options.headSigned },
+          ],
+        }]),
+        ...(options.extraDocuments || []),
       ] });
     } else if (url.pathname.endsWith('/dieutri/bachoduyetky')) {
       calls.push('list');
@@ -127,7 +189,7 @@ async function fixture(t, options = {}) {
           <li><a href="#document" title="${DOCUMENT_NAME}">${DOCUMENT_NAME}</a></li>
         </ul>
         <button title="${SIGN_TITLE}" id="sign">Ký</button>
-        <button id="send">Gửi ký hồ sơ</button>
+        <button id="send" style="display:${options.alreadyAuthorized ? '' : 'none'}" ${options.iconSend ? 'title="Gửi ký hồ sơ" aria-label="Gửi"' : ''}>${options.iconSend ? '<i class="fa fa-paper-plane-o" style="font-size:15pt;"></i>' : 'Gửi ký hồ sơ'}</button>
         <div id="dialogs"></div>
         <script>
           localStorage.setItem('currentUser', JSON.stringify({Domain: '79415', access_token: 'fixture-token'}));
@@ -157,6 +219,9 @@ async function fixture(t, options = {}) {
             dialogs.querySelector('button').onclick = async () => {
               await window.markSigned();
               dialogs.innerHTML = '';
+              if (!${!!options.sendNeverAppears}) {
+                document.querySelector('#send').style.display = '';
+              }
             };
           };
           send.onclick = () => {
@@ -172,8 +237,8 @@ async function fixture(t, options = {}) {
       throw new Error(`Unexpected fixture request: ${url.href}`);
     }
   });
-  await page.exposeFunction('markSigned', () => { signed = true; });
-  await page.exposeFunction('markSent', () => { sent = true; });
+  await page.exposeFunction('markSigned', () => { signed = true; calls.push('sign-confirmed'); });
+  await page.exposeFunction('markSent', () => { sent = true; calls.push('send-confirmed'); });
   await page.goto(`${origin}/v2/`);
   return { page, calls };
 }
@@ -227,15 +292,60 @@ test('dry-run verifies exact sign control but never clicks sign/send', async (t)
   const { page } = await fixture(t);
   assert.equal((await signAndSend(page, { id: ID }, false)).status, 'test_ready');
   assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [0, 0]);
-  assert.deepEqual(await page.evaluate(() => [window.documentClicks || 0, window.checkClicks || 0]), [1, 0]);
-  assert.deepEqual(await page.evaluate(() => window.actionSequence), ['medical-chart', 'handover']);
+  assert.deepEqual(await page.evaluate(() => [window.documentClicks || 0, window.checkClicks || 0]), [0, 0]);
+  assert.deepEqual(await page.evaluate(() => window.actionSequence), ['medical-chart']);
+});
+
+test('doctor signed and department head unsigned permits chart signing regardless of aggregate status', async (t) => {
+  const { page } = await fixture(t, { adminAggregateSigned: true });
+  const result = await signAndSend(page, { id: ID }, true);
+  assert.equal(result.status, 'send_confirmed');
+  assert.deepEqual(result.initialAdministrativeSignature, {
+    doctorSigned: true, departmentHeadSigned: false,
+  });
+  assert.equal(result.postAdministrativeSignature, undefined);
+  assert.deepEqual(await page.evaluate(() => window.actionSequence), ['medical-chart']);
+  assert.deepEqual(await page.evaluate(() => [window.documentClicks || 0, window.signClicks, window.sendClicks]), [0, 1, 1]);
+});
+
+test('unsigned doctor or already signed department head prevents signing and sending', async (t) => {
+  for (const options of [{ doctorUnsigned: true }, { headSigned: true },
+    { doctorUnsigned: true, headSigned: true }]) {
+    const { page } = await fixture(t, options);
+    const result = await signAndSend(page, { id: ID }, true);
+    assert.equal(result.status, 'skipped');
+    assert.match(result.note, /Thông tin hành chính/);
+    assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [0, 0]);
+  }
+});
+
+test('missing or duplicate administrative document reports an error without signing', async (t) => {
+  for (const options of [{ adminMissing: true }, {
+    extraDocuments: [{ Ten: ADMINISTRATIVE_NAME, IsDaKySo: true }],
+  }]) {
+    const { page } = await fixture(t, options);
+    await assert.rejects(signAndSend(page, { id: ID }, true), /đúng một mục Thông tin hành chính/);
+    assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [0, 0]);
+  }
+});
+
+test('API is checked before signing, then sending follows confirmation and button readiness without another document read', async (t) => {
+  const { page, calls } = await fixture(t, { rejectDocumentsAfterSign: true, iconSend: true });
+  const result = await signAndSend(page, { id: ID }, true);
+  assert.equal(result.status, 'send_confirmed');
+  assert.deepEqual(result.initialAdministrativeSignature, {
+    doctorSigned: true, departmentHeadSigned: false,
+  });
+  assert.deepEqual(calls, ['documents', 'sign-confirmed', 'send-confirmed']);
+  assert.deepEqual(await page.evaluate(() => window.actionSequence), ['medical-chart']);
+  assert.deepEqual(await page.evaluate(() => [window.signClicks, window.sendClicks]), [1, 1]);
 });
 
 test('opens medical chart using visible name when title is absent', async (t) => {
   const { page } = await fixture(t);
   await page.locator('#medical-chart a').evaluate((anchor) => anchor.removeAttribute('title'));
   assert.equal((await signAndSend(page, { id: ID }, false)).status, 'test_ready');
-  assert.deepEqual(await page.evaluate(() => window.actionSequence), ['medical-chart', 'handover']);
+  assert.deepEqual(await page.evaluate(() => window.actionSequence), ['medical-chart']);
 });
 
 test('ambiguous medical chart prevents any document inspection or signing', async (t) => {
@@ -249,23 +359,12 @@ test('ambiguous medical chart prevents any document inspection or signing', asyn
 test('administrative false is allowed together with target false and other true statuses', async (t) => {
   const { page } = await fixture(t, {
     extraDocuments: [
-      { Ten: 'Thông tin hành chính', IsDaKySo: false },
       { Ten: 'Bìa bệnh án', IsDaKySo: true },
     ],
   });
   const result = await signAndSend(page, { id: ID }, true);
   assert.equal(result.status, 'send_confirmed');
   assert.deepEqual(result.check.unsignedDocuments, [DOCUMENT_NAME, 'Thông tin hành chính']);
-  assert.deepEqual(result.postSignCheck.unsignedDocuments, ['Thông tin hành chính']);
-});
-
-test('a new unsigned document detected after signing prevents sending', async (t) => {
-  const { page } = await fixture(t, {
-    extraDocuments: [{ Ten: 'Phiếu chỉ định', IsDaKySo: true }],
-    afterSignDocuments: [{ Ten: 'Phiếu chỉ định', IsDaKySo: false }],
-  });
-  await assert.rejects(signAndSend(page, { id: ID }, true), /Không gửi hồ sơ sau khi ký:.*Phiếu chỉ định/);
-  assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [1, 0]);
 });
 
 test('nullable non-target API entries allow dry-run and verified signing', async (t) => {
@@ -275,6 +374,8 @@ test('nullable non-target API entries allow dry-run and verified signing', async
   assert.equal((await signAndSend(page, { id: ID }, false)).status, 'test_ready');
   assert.equal((await signAndSend(page, { id: ID }, true)).status, 'send_confirmed');
   assert.deepEqual(await page.evaluate(() => [window.signClicks, window.sendClicks]), [1, 1]);
+  assert.deepEqual(await page.evaluate(() => window.actionSequence), ['medical-chart', 'medical-chart']);
+  assert.equal(await page.evaluate(() => window.documentClicks || 0), 0);
 });
 
 test('unknown target signature status cannot trigger signing or sending', async (t) => {
@@ -296,7 +397,7 @@ test('signing verifies API state then confirms exact saved send modal and verifi
   const { page, calls } = await fixture(t);
   assert.equal((await signAndSend(page, { id: ID }, true)).status, 'send_confirmed');
   assert.deepEqual(await page.evaluate(() => [window.signClicks, window.sendClicks]), [1, 1]);
-  assert.equal(calls.filter((call) => call === 'documents').length, 3);
+  assert.equal(calls.filter((call) => call === 'documents').length, 1);
   assert.equal(await isRecordInList(page, 'https://bvrhm.hosoyte.com/api/79415/dieutri/bachoduyetky', ID), false);
 });
 
@@ -306,10 +407,124 @@ test('already signed document does not sign or send again', async (t) => {
   assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [0, 0]);
 });
 
+test('sender signature permits sending while aggregate document status remains false', async (t) => {
+  const { page, calls } = await fixture(t, { iconSend: true });
+  const result = await signAndSend(page, { id: ID }, true);
+  assert.equal(result.status, 'send_confirmed');
+  assert.deepEqual(result.initialSignature, { senderSigned: true, receiverSigned: false });
+  assert.deepEqual(result.check.unsignedDocuments, [DOCUMENT_NAME, ADMINISTRATIVE_NAME]);
+  assert.deepEqual(await page.evaluate(() => [window.signClicks, window.sendClicks]), [1, 1]);
+  assert.equal(calls.filter((call) => call === 'documents').length, 1);
+  assert.equal(result.signedThisRun, true);
+});
+
+test('existing send button permits sending without signing authorization again', async (t) => {
+  const { page } = await fixture(t, { alreadyAuthorized: true, iconSend: true });
+  await page.locator('#sign').evaluate((button) => button.remove());
+  const result = await signAndSend(page, { id: ID }, true);
+  assert.equal(result.status, 'send_confirmed');
+  assert.equal(result.signedThisRun, false);
+  assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [0, 1]);
+});
+
+test('dry-run with existing send button never signs or sends', async (t) => {
+  const { page } = await fixture(t, { alreadyAuthorized: true, iconSend: true });
+  const result = await signAndSend(page, { id: ID }, false);
+  assert.equal(result.status, 'test_ready');
+  assert.equal(result.sendReady, true);
+  assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [0, 0]);
+});
+
+test('confirmation alone cannot send when send button never appears', async (t) => {
+  const { page, calls } = await fixture(t, { sendNeverAppears: true });
+  await assert.rejects(signAndSend(page, { id: ID }, true), /nút Gửi ký hồ sơ chưa xuất hiện/);
+  assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [1, 0]);
+  assert.equal(calls.filter((call) => call === 'documents').length, 1);
+});
+
+test('disabled existing send button cannot trigger signing or sending', async (t) => {
+  const { page } = await fixture(t, { alreadyAuthorized: true, iconSend: true });
+  await page.locator('#send').evaluate((button) => { button.disabled = true; });
+  await assert.rejects(signAndSend(page, { id: ID }, true), /Không có duy nhất nút Gửi ký hồ sơ/);
+  assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [0, 0]);
+});
+
+test('receiver signed without sender prevents signing and sending', async (t) => {
+  const { page } = await fixture(t, { receiverSigned: true, senderUnsigned: true });
+  assert.equal((await signAndSend(page, { id: ID }, true)).status, 'skipped');
+  assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [0, 0]);
+});
+
+test('unsigned sender prevents authorization signing and sending', async (t) => {
+  const { page } = await fixture(t, { senderUnsigned: true });
+  assert.equal((await signAndSend(page, { id: ID }, true)).status, 'skipped');
+  assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [0, 0]);
+});
+
+test('receiver already signed prevents authorization signing and sending', async (t) => {
+  const { page } = await fixture(t, { receiverSigned: true });
+  assert.equal((await signAndSend(page, { id: ID }, true)).status, 'skipped');
+  assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [0, 0]);
+});
+
+test('icon-only send button appearing after signing is found by its exact title', async (t) => {
+  const { page } = await fixture(t, { iconSend: true });
+  assert.equal(await page.locator('#send').isVisible(), false);
+  assert.equal((await signAndSend(page, { id: ID }, true)).status, 'send_confirmed');
+  assert.deepEqual(await page.evaluate(() => [window.signClicks, window.sendClicks]), [1, 1]);
+});
+
+test('multiple visible send buttons prevent signing and sending', async (t) => {
+  const { page } = await fixture(t, { iconSend: true });
+  await page.evaluate(() => {
+    const duplicate = document.createElement('button');
+    duplicate.title = 'Gửi ký hồ sơ';
+    document.body.append(duplicate);
+  });
+  await page.locator('#send').evaluate((button) => { button.style.display = ''; });
+  await assert.rejects(signAndSend(page, { id: ID }, true), /Không có duy nhất nút Gửi ký hồ sơ/);
+  assert.deepEqual(await page.evaluate(() => [window.signClicks || 0, window.sendClicks || 0]), [0, 0]);
+});
+
+test('hidden send buttons do not make the visible icon button ambiguous', async (t) => {
+  const { page } = await fixture(t, { iconSend: true });
+  await page.evaluate(() => {
+    const hidden = document.createElement('button');
+    hidden.title = 'Gửi ký hồ sơ';
+    hidden.style.display = 'none';
+    document.body.append(hidden);
+  });
+  assert.equal((await signAndSend(page, { id: ID }, true)).status, 'send_confirmed');
+  assert.deepEqual(await page.evaluate(() => [window.signClicks, window.sendClicks]), [1, 1]);
+});
+
 test('warning modal cannot be accepted as sign or send confirmation', async (t) => {
   const { page } = await fixture(t);
   await page.locator('#check').click();
   await assert.rejects(acceptAction(page, 'sign'), /không đúng thao tác/);
+  await assert.rejects(acceptAction(page, 'send'), /không đúng thao tác/);
+  assert.equal(await page.locator('.modal-dialog').count(), 1);
+});
+
+test('send confirmation titled warning for KHTH is accepted, missing-signature warning is not', async (t) => {
+  const { page } = await fixture(t);
+  await page.evaluate(() => {
+    dialogs.innerHTML = '<div class="modal-dialog"><h4>Cảnh báo</h4><span>×</span>' +
+      '<p>Bạn xác nhận gửi Gửi KHTH bệnh án này?</p>' +
+      '<button id="confirmation-dialog-btn-accept">Đồng ý</button><button>Thoát</button></div>';
+    dialogs.querySelector('#confirmation-dialog-btn-accept').onclick = () => {
+      window.khthAccepted = true;
+      dialogs.innerHTML = '';
+    };
+  });
+  await acceptAction(page, 'send');
+  assert.equal(await page.evaluate(() => window.khthAccepted), true);
+
+  await page.evaluate(() => {
+    dialogs.innerHTML = '<div class="modal-dialog"><h4>Cảnh báo</h4>' +
+      '<p>Phiếu chưa hoàn thành ký: thiếu chữ ký. Bạn xác nhận gửi Gửi KHTH bệnh án này?</p>' +
+      '<button id="confirmation-dialog-btn-accept">Đồng ý</button></div>';
+  });
   await assert.rejects(acceptAction(page, 'send'), /không đúng thao tác/);
   assert.equal(await page.locator('.modal-dialog').count(), 1);
 });
@@ -321,6 +536,21 @@ test('verification checks all API pages and rejects malformed record IDs', async
   assert.equal(calls.filter((call) => call === 'list').length, 2);
   const malformed = await fixture(t, { malformedList: true });
   await assert.rejects(isRecordInList(malformed.page, url, ID), /ID hồ sơ hợp lệ/);
+});
+
+test('refresh clicks the exact search button and waits for the list API', async (t) => {
+  const { page, calls } = await fixture(t);
+  await page.evaluate(() => {
+    document.body.innerHTML = '<button class="btn btn-success btn-sm" id="s"><i class="fa fa fa-search"></i></button>' +
+      '<button class="btn btn-success btn-sm"><i class="fa fa-plus"></i></button>' +
+      '<table><tbody id="tblBenhNhan"></tbody></table>';
+    document.querySelector('#s').onclick = () => fetch('/api/79415/dieutri/bachoduyetky?pageIndex=1');
+  });
+  const before = calls.filter((call) => call === 'list').length;
+  await refreshList(page);
+  assert.equal(calls.filter((call) => call === 'list').length, before + 1);
+  await page.evaluate(() => { document.querySelector('#s').remove(); });
+  await assert.rejects(refreshList(page), /nút tìm kiếm/);
 });
 
 test('pagination snapshots every page and finds records after page shifts', async (t) => {
@@ -350,6 +580,5 @@ test('pagination snapshots every page and finds records after page shifts', asyn
     window.render();
   }, { id: ID, otherId: OTHER_ID });
   assert.deepEqual((await collectRecords(page, 0)).map((record) => record.id), [OTHER_ID, ID]);
-  assert.equal(await (await locateRecord(page, OTHER_ID)).count(), 1);
   assert.deepEqual((await collectRecords(page, 1)).map((record) => record.id), [OTHER_ID]);
 });

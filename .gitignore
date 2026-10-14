@@ -8,6 +8,9 @@ playwright/.cache/
 # Local auth/session state
 storageState.json
 storageState.director.json
+AutoSignDirector/node_modules/
+AutoSignDirector/.browsers/
+AutoSignDirector/logs/
 
 # Runtime outputs
 output.jsonl
@@ -38,3 +41,4 @@ npm-debug.log*
 
 # Standalone distribution
 AutoDownload-Windows.zip
+AutoSignDirector-Windows.zip

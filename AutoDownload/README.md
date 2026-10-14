@@ -42,6 +42,24 @@ Kết quả được lưu vào Excel sau mỗi mã. Chạy lại bỏ qua các t
 (kể cả `HOAN_TAT_MOT_PHAN` và các trạng thái bỏ qua); xử lý lại mã `LOI` hoặc
 chưa xử lý. Không đổi quy tắc này khi tách bộ độc lập.
 
+## Tự đăng nhập lại khi chạy lâu
+
+- Đăng nhập chủ động sau **6 giờ**, trước khi xử lý mã BN tiếp theo;
+  không cắt ngang một phim đang tải để đăng nhập.
+- Nếu bị chuyển về trang login, mất token hoặc API trả **HTTP 401**,
+  tự đăng nhập bằng tài khoản trong cấu hình và tìm lại **cùng mã BN**.
+  Các phim đã tải xong trong lần chạy hiện tại được giữ lại, không tải lại.
+- Mỗi lần xử lý mã cho phép tối đa **2 lần phục hồi phiên**. Nếu đăng nhập
+  thất bại hoặc phiên tiếp tục hết hạn, ghi lỗi mã hiện tại vào Excel và
+  dừng với thông báo, thay vì chạy tiếp rồi đánh dấu lỗi hàng loạt.
+  Giữ đường dẫn phim đã tải; loại phim bị gián đoạn mang trạng thái `LOI`
+  để không bị coi nhầm là đã tải đủ khi chạy lại.
+- HTTP 403 (không đủ quyền) và lỗi mạng/server không được coi là hết phiên.
+
+Sau khi cài bằng CaiDat.cmd, chạy `npm test` trong thư mục này để kiểm tra
+phục hồi phiên. Kiểm thử dùng dữ liệu giả và trang local, không dùng tài khoản
+PACS thật và không thay đổi danh sách bệnh nhân.
+
 ## Chuyển danh sách cũ
 
 Sao chép Excel cũ vào bộ mới **chỉ khi Excel và script đều đã dừng**. Nếu cần

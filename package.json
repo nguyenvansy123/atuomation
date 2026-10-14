@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "test": "node --test tests/data-service.test.js tests/auto-sign-director.test.js"
+    "test": "node --test tests/data-service.test.js AutoSignDirector/tests/auto-sign-director.test.js"
   },
   "dependencies": {
     "exceljs": "^4.4.0",

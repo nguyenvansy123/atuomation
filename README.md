@@ -38,8 +38,8 @@ node auto-sign-director.js --execute --limit 1
 ```
 
 Bỏ `--limit` để xử lý toàn bộ danh sách đã lọc. Script chốt ID trên tất cả
-trang trước khi ký, sau đó tìm lại từng hồ sơ để tránh bỏ sót khi gửi làm
-thay đổi phân trang.
+trang trước khi ký, sau đó kiểm tra từng hồ sơ còn trong danh sách bằng API (không lật
+trang trên giao diện) để tránh bỏ sót khi gửi làm thay đổi phân trang.
 
 Quy tắc:
 
@@ -55,23 +55,41 @@ Quy tắc:
 - Các phiếu có `IsDaKySo === true` được ghi nhận đã ký số. Giá trị `null`
   không thuộc danh sách `false` theo quy tắc này và được ghi riêng, không
   tự coi là đã ký. Kiểu dữ liệu lạ hoặc thiếu trường vẫn gây lỗi rõ ràng.
-- Chỉ khi đạt quy tắc API mới mở phiếu giao nhận, bấm đúng nút có title hoặc tên truy cập
-  **Ký số Trưởng khoa ký ủy quyền Giám đốc**. Không ký Thông tin hành chính,
-  không dùng nút người giao/người nhận và không tự đặt ảnh chữ ký.
-- Xác minh `IsDaKySo` qua API trước khi bấm **Gửi ký hồ sơ**, rồi chỉ
-  chấp nhận hộp thoại xác nhận gửi phù hợp, không chấp nhận cảnh báo.
+- Trước khi ký ủy quyền, kiểm tra phiếu giao nhận qua `HSDiKemViTriKy` của API:
+  đúng một vị trí `MaViTri="NguoiGiaoHoSo"` có `IsDaKy=true` và đúng một
+  vị trí `MaViTri="NguoiNhanHoSo"` có `IsDaKy=false` mới đủ điều kiện.
+  Người giao chưa ký hoặc người nhận đã ký thì bỏ qua, không ký/gửi.
+  Chữ ký người giao là điều kiện có sẵn, không phải chữ ký ủy quyền Giám đốc.
+- Chỉ khi đạt quy tắc API và điều kiện giao/nhận mới mở phiếu giao nhận.
+  Nếu **Gửi ký hồ sơ** đã hiển thị và được phép bấm thì không ký ủy quyền
+  lại. Nếu chưa có nút gửi thì bấm đúng nút có title hoặc tên truy cập
+  **Ký số Trưởng khoa ký ủy quyền Giám đốc**, xác nhận ký rồi chờ nút gửi.
+  Theo luồng này, nút gửi sẵn sàng là tín hiệu giao diện để tiếp tục;
+  script không xác minh chữ ký ủy quyền bằng một trường API riêng.
+  Không ký Thông tin hành chính, không dùng nút người giao/người nhận và
+  không tự đặt ảnh chữ ký.
+  Không chờ `IsDaKySo` toàn phiếu thành `true`, vì người nhận còn chưa ký.
+  Không dùng riêng ảnh chữ ký hoặc `UrlFileKySo` làm bằng chứng đã ký.
+  Thiếu/trùng vị trí hoặc `IsDaKy` không phải boolean thì báo lỗi, không gửi.
+  Chỉ chấp nhận hộp thoại xác nhận gửi phù hợp, không chấp nhận cảnh báo.
+  Nút gửi có thể chỉ có biểu tượng máy bay giấy và xuất hiện sau khi ký:
+  script tìm theo `title="Gửi ký hồ sơ"` hoặc tên truy cập tương ứng,
+  chỉ bấm khi có đúng một nút hiển thị và được phép bấm. Terminal ghi rõ
+  từng bước chờ xác nhận ký ủy quyền, tìm nút gửi và kiểm tra lại API.
   Các phiếu khác có thể có `IsDaKySo: null`; điều này không làm hỏng việc
   đọc danh sách và không bị quy đổi thành đã ký/chưa ký. Riêng phiếu giao
   nhận phải có trạng thái boolean rõ ràng; nếu `null` thì không ký/gửi.
-- Sau khi xác minh phiếu giao nhận đã ký, đọc lại API và kiểm tra toàn bộ
-  phiếu một lần nữa trước khi gửi. Nếu có phiếu khác chuyển sang `false`,
+- Sau khi nút gửi xuất hiện, đọc lại API và kiểm tra toàn bộ
+  phiếu cùng hai vị trí ký một lần nữa trước khi gửi. Nếu có phiếu khác
+  chuyển sang `false`, người giao không còn đã ký hoặc người nhận đã ký,
   không gửi hồ sơ. Thông tin hành chính có thể vẫn `false` theo quy tắc
   đã chọn, nhưng script không tự xác nhận các cảnh báo của hệ thống.
 - Kiểm tra lại API danh sách với bộ lọc đã chọn: chỉ ghi nhận hoàn tất
   khi hồ sơ không còn trong danh sách. Nếu đã xác nhận gửi nhưng không
   xác minh được, dừng chạy để kiểm tra thủ công, không tự gửi lại.
-- Phiếu trùng tên hoặc API đã báo phiếu được ký từ trước: không ký/gửi lại;
-  cần kiểm tra thủ công chữ ký theo vai trò.
+- Phiếu trùng tên hoặc API báo toàn phiếu đã ký: không ký/gửi lại;
+  cần kiểm tra thủ công chữ ký theo vai trò. Người giao đã ký từ trước
+  không phải lý do bỏ qua: đó là điều kiện bắt buộc để xử lý ký ủy quyền/gửi.
 
 Kết quả nối thêm vào `logs/auto-sign-director.jsonl`; lỗi được ghi bằng logger
 hiện có và chụp ảnh trang chi tiết trong `logs`. Các file này chứa thông tin
@@ -79,6 +97,9 @@ hồ sơ, cần bảo quản như dữ liệu y tế. Chế độ kiểm tra ch�
 và nút ký, không chứng minh rằng thao tác ký/gửi thật sẽ thành công.
 Kết quả có `check.unsignedDocuments`, `check.blockingDocuments` và
 `check.nullStatusDocuments` để đối chiếu điều kiện từ API.
+Kết quả gửi có thêm `postSignSignature.senderSigned` và
+`postSignSignature.receiverSigned` để đối chiếu hai vị trí ký trước khi gửi.
+`signedThisRun` cho biết lượt này có bấm ký ủy quyền hay dùng nút gửi sẵn có.
 
 Kiểm thử bằng giao diện/API giả lập, không gọi máy chủ bệnh viện:
 

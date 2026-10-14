@@ -56,6 +56,7 @@ const path = require('path');
 const { Readable, Transform } = require('stream');
 const { pipeline } = require('stream/promises');
 const { docCauHinh } = require('./config');
+const { PhienDangNhap, PhienHetHanError, LoiDangNhapError, kiemTraPhanHoiDangNhap } = require('./session');
 const cauHinh = docCauHinh();
 
 // ----------------------------- CẤU HÌNH ------------------------------
@@ -84,6 +85,8 @@ const CFG = {
   selEmail: '#Email',
   selPass: '#Password',
   selNutLogin: 'button[type="submit"]',
+  dangNhapLaiSauMs: 6 * 60 * 60000, // đăng nhập chủ động giữa các mã, không cắt ngang phim đang tải
+  soLanDangNhapLaiKhiHetPhien: 2,
 
   // --- Trang danh sách / tìm kiếm ca chụp ---
   urlTimKiem: 'http://113.161.41.190:8088/',
@@ -202,6 +205,8 @@ const CFG = {
 // =====================================================================
 
 const nghi = (ms) => new Promise((r) => setTimeout(r, ms));
+const phien = new PhienDangNhap(CFG);
+const daTaiTrongLanChay = new Set();
 
 // Lỗi riêng để đánh dấu "chủ động bỏ qua" (ví dụ do không đúng độ dày lát
 // cắt) — khác với lỗi thật sự, không cần thử lại.
@@ -232,15 +237,7 @@ function chuanHoa(s) {
 }
 
 async function dangNhap(page) {
-  await page.goto(CFG.urlLogin);
-  await page.fill(CFG.selEmail, CFG.user);
-  await page.fill(CFG.selPass, CFG.pass);
-  await page.click(CFG.selNutLogin);
-  // KHÔNG dùng waitForLoadState('networkidle') vì trang này có request nền
-  // liên tục (SignalR, polling...) nên mạng không bao giờ "rảnh" đủ lâu,
-  // sẽ luôn bị timeout. Thay vào đó chờ đúng ô tìm kiếm ở trang chính xuất
-  // hiện — đây là dấu hiệu chắc chắn đăng nhập đã thành công.
-  await page.waitForSelector(CFG.selOTimKiem, { timeout: 60000 });
+  await phien.dangNhap(page);
 }
 
 // Lấy tên bệnh nhân của 1 dòng kết quả (dựa vào ô có style font-weight:
@@ -293,6 +290,7 @@ async function layDoDayLatCat(popup) {
 async function xacNhanChiDinhToanCanh(page, dongLocator, loaiToanCanh) {
   await dongLocator.click({ force: true });
   await page.waitForTimeout(CFG.doiSauKhiBamDongMs);
+  await phien.kiemTra(page);
   const doanChiDinh = page.locator('p', { hasText: CFG.textNhanChiDinh }).first();
   const coHienThi = await doanChiDinh.isVisible().catch(() => false);
   if (!coHienThi) return false; // không đọc được -> coi như chưa xác nhận được, bỏ qua cho an toàn
@@ -317,8 +315,14 @@ async function moTabViewer(page, ma, dongLocator) {
     }
   );
   const popup = await page.context().newPage();
-  await popup.goto(url);
-  return popup;
+  phien.theoDoi(popup);
+  try {
+    await popup.goto(url);
+    return popup;
+  } catch (e) {
+    await popup.close().catch(() => {});
+    throw e;
+  }
 }
 
 // Mở Viewer và chờ trang thật sự sẵn sàng (menu "☰" hiện ra). Trang web
@@ -332,12 +336,19 @@ async function moViewerVaCho(page, ma, dongLocator) {
     try {
       await popup.waitForLoadState('domcontentloaded');
       await demNguoc(`[${ma}] Đang chờ Viewer khởi tạo & tải dữ liệu ảnh`, CFG.doiSauKhiMoViewerMs);
+      await phien.kiemTra(popup);
       const nutMenu = popup.locator(CFG.selNutMenuViewer).first();
       await nutMenu.waitFor({ state: 'visible', timeout: CFG.timeoutChoTrangSanSangMs });
       return popup; // trang đã sẵn sàng
     } catch (e) {
+      try {
+        await phien.kiemTra(popup);
+        await phien.kiemTra(page);
+      } finally {
+        await popup.close().catch(() => {});
+      }
+      if (e instanceof PhienHetHanError) throw e;
       loiCuoi = e;
-      await popup.close().catch(() => {});
       const conLan = lan < CFG.soLanThuLaiKhiTrangKhongLoad;
       console.log(`  [${ma}] Trang Viewer không tải được (lần ${lan}/${CFG.soLanThuLaiKhiTrangKhongLoad})`);
       if (conLan) {
@@ -355,8 +366,9 @@ async function moViewerVaCho(page, ma, dongLocator) {
 // Lấy token đăng nhập hiện tại từ localStorage của trang web (luôn đọc
 // mới mỗi lần vì trang web tự làm mới token định kỳ).
 async function layToken(page) {
+  await phien.kiemTra(page);
   const token = await page.evaluate(() => localStorage.getItem('token'));
-  if (!token) throw new Error('Không lấy được token đăng nhập (phiên đăng nhập có thể đã hết hạn)');
+  if (!token) throw new PhienHetHanError('Không lấy được token đăng nhập (phiên đăng nhập có thể đã hết hạn)');
   return token;
 }
 
@@ -365,6 +377,7 @@ async function layToken(page) {
 async function goiApi(url, options, ma, moTa) {
   for (let lan = 1; ; lan++) {
     const res = await fetch(url, options);
+    await kiemTraPhanHoiDangNhap(res, moTa);
     if (res.status === 429 && lan < CFG.soLanThuLaiKhiServerQuaTai) {
       await res.body?.cancel().catch(() => {});
       await demNguoc(
@@ -500,6 +513,7 @@ async function kiemTraLatCatConeBeam(page, ma, dongLocator, hopHuy) {
     // Cone Beam là file nặng nên cần đợi thêm để viewer tải đủ dữ liệu
     // trước khi đọc được độ dày lát cắt.
     await demNguoc(`[${ma}] Đang chờ tải thêm dữ liệu Cone Beam (file nặng)`, CFG.doiThemChoConeBeamMs);
+    await phien.kiemTra(popup);
 
     // Chỉ tải nếu độ dày lát cắt <= ngưỡng cho phép, dày hơn thì bỏ qua
     // (không phải lỗi — chỉ là phim này không đạt điều kiện).
@@ -511,6 +525,9 @@ async function kiemTraLatCatConeBeam(page, ma, dongLocator, hopHuy) {
       );
     }
     console.log(`  [${ma}] Độ dày lát cắt ${doDayThucTe}mm -> đạt, tiến hành tải.`);
+  } catch (e) {
+    await phien.kiemTra(popup);
+    throw e;
   } finally {
     await popup.close().catch(() => {});
     hopHuy.popup = null;
@@ -529,6 +546,14 @@ async function taiMotDong(page, ma, tenBN, loai, dongLocator, thoiGianChup, hopH
   const controller = new AbortController();
   hopHuy.controller = controller;
 
+  const phanThoiGian = thoiGianChup ? ` - ${thoiGianChup.choTenFile}` : '';
+  const tenFile = lamSachTenFile(`${ma} - ${tenBN} - ${loai.ten}${phanThoiGian}.zip`);
+  const duongDan = path.join(CFG.thuMucTai, ma, tenFile);
+  if (daTaiTrongLanChay.has(duongDan) && fs.existsSync(duongDan) && kiemTraZipHopLe(duongDan)) {
+    console.log(`  [${ma}] Giữ phim đã tải xong trong lần chạy này: ${duongDan}`);
+    return duongDan;
+  }
+
   if (loai.ma === 'CONE_BEAM') {
     await kiemTraLatCatConeBeam(page, ma, dongLocator, hopHuy);
   }
@@ -538,13 +563,11 @@ async function taiMotDong(page, ma, tenBN, loai, dongLocator, thoiGianChup, hopH
   const token = await layToken(page);
   const { seID, soAnh } = await layThongTinSeries(sid, token, ma, controller.signal);
 
-  const phanThoiGian = thoiGianChup ? ` - ${thoiGianChup.choTenFile}` : '';
-  const tenFile = lamSachTenFile(`${ma} - ${tenBN} - ${loai.ten}${phanThoiGian}.zip`);
-  const duongDan = path.join(CFG.thuMucTai, ma, tenFile);
   fs.mkdirSync(path.dirname(duongDan), { recursive: true });
 
   hopHuy.dangTaiFile = true;
   const soByte = await taiZipTrucTiep(seID, token, duongDan, ma, loai.ten, soAnh, controller);
+  daTaiTrongLanChay.add(duongDan);
   console.log(`  [${ma}] Đã lưu ${(soByte / 1048576).toFixed(1)} MB -> ${duongDan}`);
   return duongDan;
 }
@@ -588,6 +611,8 @@ async function taiMotDongCoThoiHan(page, ma, tenBN, loai, dongLocator, thoiGianC
       ]);
     } catch (e) {
       if (e instanceof BoQuaError) throw e; // không đạt điều kiện (vd lát cắt) -> không cần thử lại, báo luôn cho nơi gọi
+      if (e instanceof PhienHetHanError) throw e;
+      await phien.kiemTra(page);
       loiCuoi = e;
       const conLan = lan < CFG.soLanThuLaiKhiTaiThatBai;
       console.log(
@@ -645,12 +670,14 @@ async function xuLyMaBN(ma, page, daCoSan) {
 
   doiTrangThai('DANG_TIM_KIEM');
   await page.goto(CFG.urlTimKiem);
+  await phien.kiemTra(page);
   await page.fill(CFG.selOTimKiem, ma);
   // QUAN TRỌNG: bộ lọc ngày mặc định chỉ là "Hôm nay" -> phải bấm "Tất cả"
   // thì mới tìm ra phim của những ngày trước đó.
   await page.getByRole('button', { name: CFG.textNutTatCaNgay, exact: true }).first().click();
   await page.keyboard.press('Enter');
   await demNguoc(`[${ma}] Đang chờ dữ liệu tìm kiếm tải xong`, CFG.doiSauKhiTimKiemMs);
+  await phien.kiemTra(page);
 
   const soDong = await page.locator(CFG.selDongKetQua).count();
   if (soDong === 0) {
@@ -752,6 +779,13 @@ async function xuLyMaBN(ma, page, daCoSan) {
         coConeBeamDat = true;
         // KHÔNG dừng lại — tiếp tục kiểm tra/tải các ca Cone Beam còn lại.
       } catch (e) {
+        if (e instanceof PhienHetHanError) {
+          e.chiTiet = [...chiTiet, {
+            loai: 'CONE_BEAM', ten: loaiConeBeam.ten, ok: false, boQua: false,
+            hetPhien: true, loi: e.message,
+          }];
+          throw e;
+        }
         const boQua = e instanceof BoQuaError;
         if (!boQua) coLoiThatConeBeam = true;
         chiTiet.push({ loai: 'CONE_BEAM', ten: loaiConeBeam.ten, ok: false, boQua, loi: e.message });
@@ -786,6 +820,13 @@ async function xuLyMaBN(ma, page, daCoSan) {
         chiTiet.push({ loai: 'TOAN_CANH', ten: loaiToanCanh.ten, ok: true, boQua: false, duongDan });
         console.log(`  [${ma}] Đã tải "${loaiToanCanh.ten}": ${duongDan}`);
       } catch (e) {
+        if (e instanceof PhienHetHanError) {
+          e.chiTiet = [...chiTiet, {
+            loai: 'TOAN_CANH', ten: loaiToanCanh.ten, ok: false, boQua: false,
+            hetPhien: true, loi: e.message,
+          }];
+          throw e;
+        }
         const boQua = e instanceof BoQuaError;
         chiTiet.push({ loai: 'TOAN_CANH', ten: loaiToanCanh.ten, ok: false, boQua, loi: e.message });
         console.log(`  [${ma}] ${boQua ? 'Bỏ qua' : 'Lỗi khi tải'} "${loaiToanCanh.ten}": ${e.message}`);
@@ -800,7 +841,8 @@ async function xuLyMaBN(ma, page, daCoSan) {
 }
 
 // Tổng hợp kết quả của 1 loại phim trong chiTiet thành:
-//  - trangThai: 'OK' (có ít nhất 1 lần tải thành công), 'BO_QUA' (mọi lần
+//  - trangThai: 'OK' (có ít nhất 1 lần tải thành công, không bị gián đoạn
+//    do hết phiên), 'BO_QUA' (mọi lần
 //    thử đều bị bỏ qua, không có lỗi thật), 'LOI' (có lỗi thật, không ca
 //    nào thành công), 'KHONG_CO' (không có entry nào — không tìm thấy).
 //  - duongDanGop: TẤT CẢ đường dẫn file đã tải thành công, nối bằng " | "
@@ -812,7 +854,10 @@ function ketQuaTongHopLoai(chiTiet, maLoai) {
 
   const daTai = khop.filter((c) => c.ok);
   if (daTai.length > 0) {
-    return { trangThai: 'OK', duongDanGop: daTai.map((c) => c.duongDan).join(' | ') };
+    return {
+      trangThai: khop.some((c) => c.hetPhien) ? 'LOI' : 'OK',
+      duongDanGop: daTai.map((c) => c.duongDan).join(' | '),
+    };
   }
 
   const coLoiThat = khop.some((c) => !c.boQua);
@@ -854,7 +899,7 @@ function ghiKetQuaVaoExcel(ws, r, { trangThai, chiTiet }, daCoSan) {
   ws.getCell(r, CFG.colCapNhatLuc).value = new Date();
 }
 
-(async () => {
+async function main() {
   fs.mkdirSync(CFG.thuMucTai, { recursive: true });
 
   const wb = new ExcelJS.Workbook();
@@ -893,13 +938,21 @@ function ghiKetQuaVaoExcel(ws, r, { trangThai, chiTiet }, daCoSan) {
     console.log(`\n[${r - CFG.hangDauTien + 1}/${tongDong - CFG.hangDauTien + 1}] Mã BN ${ma}: CHUA_XU_LY`);
 
     let ketQua = { trangThai: 'LOI', chiTiet: [] };
+    let loiDangNhap = null;
     for (let lan = 1; lan <= CFG.soLanThuLai; lan++) {
       try {
-        ketQua = await xuLyMaBN(ma, page, daCoSan);
+        ketQua = await phien.xuLyVoiDangNhapLai(page, ma, () => xuLyMaBN(ma, page, daCoSan));
         break;
       } catch (e) {
         console.log(`  [${ma}] Lỗi lần thử ${lan}/${CFG.soLanThuLai}: ${e.message}`);
-        ketQua = { trangThai: 'LOI', chiTiet: [{ loai: 'CHUNG', ten: 'Chung', ok: false, loi: `Lần ${lan}: ${e.message}` }] };
+        ketQua = { trangThai: 'LOI', chiTiet: [
+          ...(e.chiTiet || []),
+          { loai: 'CHUNG', ten: 'Chung', ok: false, loi: `Lần ${lan}: ${e.message}` },
+        ] };
+        if (e instanceof LoiDangNhapError) {
+          loiDangNhap = e;
+          break;
+        }
         await nghi(2000);
       }
     }
@@ -907,12 +960,24 @@ function ghiKetQuaVaoExcel(ws, r, { trangThai, chiTiet }, daCoSan) {
     ghiKetQuaVaoExcel(ws, r, ketQua, daCoSan);
     await wb.xlsx.writeFile(CFG.excelFile); // lưu ngay sau mỗi mã (nhớ ĐÓNG file Excel khi chạy)
     console.log(`  => Kết quả mã ${ma}: ${ketQua.trangThai}`);
+    if (loiDangNhap) {
+      await browser.close();
+      throw loiDangNhap;
+    }
     await nghi(1000);
   }
 
   await browser.close();
   console.log('\nXong!');
-})().catch((loi) => {
-  console.error(`\nAutoDownload dung vi loi: ${loi.message}`);
-  process.exit(1);
-});
+}
+
+function chay() {
+  main().catch((loi) => {
+    console.error(`\nAutoDownload dung vi loi: ${loi.message}`);
+    process.exit(1);
+  });
+}
+
+if (require.main === module) chay();
+
+module.exports = { chay, CFG, phien, goiApi, taiMotDongCoThoiHan, xuLyMaBN, ketQuaTongHopLoai };

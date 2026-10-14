@@ -1,0 +1,4 @@
+node_modules/
+.browsers/
+logs/
+storageState.director.json
