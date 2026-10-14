@@ -8,6 +8,7 @@ playwright/.cache/
 # Local auth/session state
 storageState.json
 storageState.director.json
+AutoSignDirector/config.json
 AutoSignDirector/node_modules/
 AutoSignDirector/.browsers/
 AutoSignDirector/logs/

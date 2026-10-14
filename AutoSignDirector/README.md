@@ -9,17 +9,19 @@ Tự động ký **Trưởng khoa ký ủy quyền Giám đốc** và **Gửi k�
    vào nơi có quyền ghi, ví dụ `D:\AutoSignDirector`.
 2. Cài **Node.js LTS, phiên bản 22 trở lên** từ https://nodejs.org/.
 3. Bấm đúp **CaiDat.cmd** (cần Internet để tải thư viện và Chromium, chỉ làm 1 lần).
-4. Bấm đúp **DangNhap.cmd**: trình duyệt mở ra, đăng nhập tài khoản Trưởng khoa/ủy quyền
-   Giám đốc rồi nhấn Enter ở cửa sổ lệnh để lưu phiên vào `storageState.director.json`.
-   File này chứa thông tin đăng nhập, **không chia sẻ**. Chạy lại khi phiên hết hạn.
-5. Bấm **KiemTra.cmd** để chạy thử (không ký, không gửi), rồi **Chay.cmd** để ký và gửi thật.
+4. Tạo file `config.json` (chép từ `config.example.json`) và điền tài khoản Trưởng khoa/ủy
+   quyền Giám đốc, hoặc đặt biến môi trường `HOSOYTE_USER`/`HOSOYTE_PASS`.
+5. Bấm đúp **DangNhap.cmd**: script **tự đăng nhập** bằng tài khoản trong `config.json`
+   rồi lưu phiên vào `storageState.director.json`. File này chứa thông tin đăng nhập,
+   **không chia sẻ**. Chạy lại khi phiên hết hạn.
+6. Bấm **KiemTra.cmd** để chạy thử (không ký, không gửi), rồi **Chay.cmd** để ký và gửi thật.
 
 ## Cách chạy
 
 | File | Tác dụng |
 | --- | --- |
 | `CaiDat.cmd` | Cài thư viện và Chromium vào thư mục này (1 lần). |
-| `DangNhap.cmd` | Lưu tài khoản; chạy lại khi hết phiên hoặc đổi tài khoản. |
+| `DangNhap.cmd` | Tự đăng nhập bằng `config.json` và lưu tài khoản; chạy lại khi hết phiên hoặc đổi tài khoản. |
 | `KiemTra.cmd` | Chế độ kiểm tra, **không ký và không gửi**. |
 | `Chay.cmd` | **Ký và gửi thật** toàn bộ hồ sơ trong danh sách đã lọc. |
 
@@ -35,7 +37,8 @@ Chay.cmd --limit 1
 
 Tương đương dòng lệnh: `node auto-sign-director.js [--execute] [--limit N]` và
 `node auto-sign-director.js --login` (đặt `PLAYWRIGHT_BROWSERS_PATH` tới thư mục
-`.browsers` trước khi chạy thủ công; các file `.cmd` đã làm việc đó).
+`.browsers` trước khi chạy thủ công; các file `.cmd` đã làm việc đó). Tài khoản đăng
+nhập tự động đọc từ `config.json` hoặc biến môi trường `HOSOYTE_USER`/`HOSOYTE_PASS`.
 
 ## Luồng xử lý mỗi hồ sơ
 
@@ -70,6 +73,7 @@ không gọi máy chủ bệnh viện và không ký/gửi thật.
 ## Lỗi thường gặp
 
 - Thiếu Node.js/thư viện/trình duyệt: chạy lại `CaiDat.cmd`, đọc lỗi trên màn hình.
-- "Chưa có phiên tài khoản": chạy `DangNhap.cmd`.
-- Không tìm thấy nút ký/gửi hoặc phiên hết hạn: đăng nhập lại bằng `DangNhap.cmd`.
+- "Thieu tai khoan dang nhap": tạo `config.json` hoặc đặt `HOSOYTE_USER`/`HOSOYTE_PASS`.
+- "Đăng nhập tự động không thành công": kiểm tra lại tài khoản/mật khẩu trong `config.json`.
+- Không tìm thấy nút ký/gửi hoặc phiên hết hạn: chạy lại `DangNhap.cmd`.
 - Không vào được website: kiểm tra mạng từ máy mới đến `https://bvrhm.hosoyte.com`.

@@ -1,0 +1,18 @@
+{
+  "name": "auto-sign-director",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone auto sign (Truong khoa uy quyen Giam doc) and send for bvrhm.hosoyte.com",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node auto-sign-director.js --execute",
+    "check": "node auto-sign-director.js",
+    "login": "node auto-sign-director.js --login",
+    "test": "node --test tests\\auto-sign-director.test.js"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}

@@ -3,8 +3,13 @@ const path = require('node:path');
 const readline = require('node:readline/promises');
 const { chromium } = require('playwright');
 const log = require('./logger');
+const { docThongTinDangNhap } = require('./config');
 
 const ORIGIN = 'https://bvrhm.hosoyte.com';
+const LOGIN_PAGE_URL = `${ORIGIN}/v2/`;
+const USERNAME_SELECTOR = 'form input[type="text"][autocomplete="username"]';
+const PASSWORD_SELECTOR = 'form input[type="password"][autocomplete="current-password"]';
+const SUBMIT_SELECTOR = 'form button[type="submit"]';
 const LIST_URL = `${ORIGIN}/v2/#/HSBA/DsBenhAnChoKy?TrangThai=ChoKyTruongKhoa`;
 const DOCUMENT_NAME = 'Phiếu giao nhận hồ sơ bệnh án';
 const MEDICAL_CHART_NAME = 'Phiếu bệnh án';
@@ -66,17 +71,55 @@ function parseOptions(args) {
   return options;
 }
 
-async function saveLoginSession(context, page, storagePath = STORAGE_STATE_PATH) {
-  if (new URL(page.url()).origin !== ORIGIN) {
-    throw new Error('Không ở website hồ sơ y tế; không lưu phiên đăng nhập');
-  }
-  const authenticated = await page.evaluate(() => {
+async function isAuthenticated(page) {
+  return page.evaluate(() => {
     const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
     return !!user && (typeof user.Domain === 'string' || typeof user.Domain === 'number') &&
       String(user.Domain).trim().length > 0 &&
       typeof user.access_token === 'string' && user.access_token.trim().length > 0;
   });
-  if (!authenticated) throw new Error('Chưa đăng nhập thành công; không lưu phiên. Hãy chạy lại với --login.');
+}
+
+async function autoLogin(page, credentials) {
+  await page.goto(LOGIN_PAGE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  const username = page.locator(USERNAME_SELECTOR);
+  await username.waitFor({ state: 'visible', timeout: TIMEOUT });
+  await page.fill(USERNAME_SELECTOR, credentials.user);
+  await page.fill(PASSWORD_SELECTOR, credentials.pass);
+  await page.click(SUBMIT_SELECTOR);
+  let outcome;
+  try {
+    outcome = await page.waitForFunction(() => {
+      const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+      if (user && (typeof user.Domain === 'string' || typeof user.Domain === 'number') &&
+          String(user.Domain).trim().length > 0 &&
+          typeof user.access_token === 'string' && user.access_token.trim().length > 0) {
+        return 'ok';
+      }
+      if (/incorrect/i.test(document.body.innerText || '')) return 'error';
+      return false;
+    }, null, { timeout: 45000 });
+  } catch (error) {
+    throw new Error(`Đăng nhập tự động không thành công: ${error.message}`, { cause: error });
+  }
+  if (outcome !== 'ok') {
+    const detail = await page.evaluate(() => {
+      const element = Array.from(document.querySelectorAll('div')).find(
+        (node) => node.children.length === 0 && /incorrect/i.test(node.textContent || '')
+      );
+      return element ? element.textContent.trim() : '';
+    });
+    throw new Error(`Đăng nhập tự động không thành công${detail ? `: ${detail}` : ''}`);
+  }
+}
+
+async function saveLoginSession(context, page, storagePath = STORAGE_STATE_PATH) {
+  if (new URL(page.url()).origin !== ORIGIN) {
+    throw new Error('Không ở website hồ sơ y tế; không lưu phiên đăng nhập');
+  }
+  if (!await isAuthenticated(page)) {
+    throw new Error('Chưa đăng nhập thành công; không lưu phiên. Hãy kiểm tra tài khoản trong config.json.');
+  }
   await context.storageState({ path: storagePath });
 }
 
@@ -124,8 +167,11 @@ async function navigatePagination(page, label) {
   await page.waitForFunction((previous) => {
     const body = document.querySelector('#tblBenhNhan');
     if (!body) return false;
-    const current = Array.from(body.querySelectorAll('a[href*="HsBenhAn/"]'))
-      .map((anchor) => anchor.getAttribute('href')).join('|');
+    const anchors = body.querySelectorAll('a[href*="HsBenhAn/"]');
+    // Bảng bị làm trống ngay sau khi bấm phân trang rồi mới hiện trang mới;
+    // phải chờ có dòng mới (khác trang cũ) để không đọc nhầm bảng rỗng.
+    if (!anchors.length) return false;
+    const current = Array.from(anchors).map((anchor) => anchor.getAttribute('href')).join('|');
     return current !== previous;
   }, before, { timeout: TIMEOUT });
   return true;
@@ -396,21 +442,21 @@ async function verifySent(page, listUrl, recordId) {
 }
 
 async function run(options) {
-  if (!options.login && !fs.existsSync(STORAGE_STATE_PATH)) {
-    throw new Error('Chưa có phiên tài khoản ký riêng. Chạy node auto-sign-director.js --login trước.');
-  }
   const browser = await chromium.launch({ headless: false });
   const input = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const context = await browser.newContext(options.login ? {} : { storageState: STORAGE_STATE_PATH });
+    const hasSession = fs.existsSync(STORAGE_STATE_PATH);
+    const context = await browser.newContext(
+      options.login || !hasSession ? {} : { storageState: STORAGE_STATE_PATH }
+    );
     context.setDefaultTimeout(TIMEOUT);
     const listPage = await context.newPage();
-    if (options.login) {
-      await listPage.goto(`${ORIGIN}/v2/`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await input.question('Đăng nhập tài khoản Trưởng khoa/ủy quyền Giám đốc trong trình duyệt mới. Xong nhấn Enter để lưu: ');
+    if (options.login || !hasSession) {
+      log.info('DIRECTOR', 'Đang đăng nhập tự động bằng tài khoản trong config.json/ biến môi trường...');
+      await autoLogin(listPage, docThongTinDangNhap());
       await saveLoginSession(context, listPage);
-      log.info('DIRECTOR', 'Đã lưu tài khoản vào storageState.director.json.');
-      return;
+      log.info('DIRECTOR', 'Đã đăng nhập tự động và lưu phiên vào storageState.director.json.');
+      if (options.login) return;
     }
     let listApiUrl;
     listPage.on('response', (response) => {
@@ -516,7 +562,7 @@ module.exports = {
   DOCUMENT_NAME, SIGN_TITLE, checkDocumentEligibility, parseOptions, targetDocument,
   collectRecords, refreshList, signAndSend, acceptAction,
   isRecordInList,
-  STORAGE_STATE_PATH, saveLoginSession,
+  STORAGE_STATE_PATH, saveLoginSession, autoLogin, isAuthenticated,
   LIST_URL, isTargetListPage,
   parseDocuments,
   MEDICAL_CHART_NAME, openMedicalChart,
